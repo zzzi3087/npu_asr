@@ -35,9 +35,20 @@ def main():
     names+=['Python','PyInstaller','pyinstaller-hooks-contrib']
     for name in names:
         if name=='Python':
-            for filename in ('LICENSE.txt','LICENSE'):
+            for filename in ('LICENSE.txt','LICENSE_PYTHON.txt','LICENSE'):
                 source=Path(sys.base_prefix)/filename
                 if source.exists():shutil.copyfile(source,target/'Python-LICENSE.txt');break
+            # Conda-built Python may use external codec/crypto libraries.
+            # Append their public notices without copying environment metadata.
+            native_notices=[]
+            for package in ('bzip2','xz','libffi','openssl','zlib','libsqlite'):
+                for meta in (Path(sys.base_prefix)/'conda-meta').glob(package+'-*.json'):
+                    info=json.loads(meta.read_text('utf-8'))
+                    folder=Path(sys.base_prefix)/'pkgs'/f"{info['name']}-{info['version']}-{info['build']}"/'info/licenses'
+                    for license_file in folder.rglob('*'):
+                        if license_file.is_file():native_notices.append('\n\n'+info['name']+' '+info['version']+' — '+license_file.name+'\n'+license_file.read_text('utf-8',errors='replace'))
+            if native_notices:
+                with (target/'Python-LICENSE.txt').open('a',encoding='utf-8') as stream:stream.write(''.join(native_notices))
             continue
         dist=metadata.distribution(name);folder=target/re.sub(r'[^A-Za-z0-9_.-]','_',name);folder.mkdir(exist_ok=True)
         license_text=dist.metadata.get('License-Expression') or dist.metadata.get('License') or 'See included license files and upstream project'
