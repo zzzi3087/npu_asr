@@ -2,6 +2,8 @@
 
 Windows 桌面实时转录与翻译软件。支持麦克风和桌面音频、双语字幕、透明桌面字幕、历史记录和导出。
 
+已在 Intel 258v 笔记本成功运行
+
 ## 安装与使用
 
 1. 在 [Releases](https://github.com/zzzi3087/npu_asr/releases/latest) 下载 `LiveCaptions-0.1.0-win64-setup.exe` 并安装。也可下载 portable ZIP，完整解压后运行 `LiveCaptions.exe`。
@@ -76,6 +78,15 @@ python tools/check_ui_stability.py
 ```
 
 安装后的可执行文件另提供 `--smoke-test --report <local-json-path>`，用于隔离测试界面、音频运行库和 NPU。加 `--model parakeet --wav <wav-path>` 可验证真实模型转录；缺少模型会下载。测试不会启动麦克风收音。
+
+## 更新预告:
+下个版本将会加入:
+版本号
+多语言支持
+转录本地音频文件
+省电优化
+后台运行
+界面优化
 
 ## 许可与致谢
 
