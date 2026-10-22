@@ -1,0 +1,193 @@
+{
+  "_id": "6a0c261937d367efb2d70fbe",
+  "id": "zhifeixie/Mega-ASR",
+  "private": false,
+  "pipeline_tag": "automatic-speech-recognition",
+  "tags": [
+    "safetensors",
+    "automatic-speech-recognition",
+    "speech-recognition",
+    "audio",
+    "robust-asr",
+    "qwen3-asr",
+    "en",
+    "zh",
+    "arxiv:2605.19833",
+    "base_model:Qwen/Qwen3-ASR-1.7B",
+    "base_model:finetune:Qwen/Qwen3-ASR-1.7B",
+    "license:apache-2.0",
+    "region:us"
+  ],
+  "downloads": 0,
+  "likes": 101,
+  "modelId": "zhifeixie/Mega-ASR",
+  "author": "zhifeixie",
+  "sha": "8a10bfd0cccb0c8b3be2852cae1e3ee73d6ffbf1",
+  "lastModified": "2026-06-09T10:44:19.000Z",
+  "gated": false,
+  "disabled": false,
+  "model-index": null,
+  "config": {},
+  "cardData": {
+    "base_model": [
+      "Qwen/Qwen3-ASR-1.7B"
+    ],
+    "license": "apache-2.0",
+    "language": [
+      "en",
+      "zh"
+    ],
+    "tags": [
+      "automatic-speech-recognition",
+      "speech-recognition",
+      "audio",
+      "robust-asr",
+      "qwen3-asr"
+    ],
+    "pipeline_tag": "automatic-speech-recognition"
+  },
+  "siblings": [
+    {
+      "rfilename": ".gitattributes",
+      "blobId": "a8435533b508290537288009ed5170a503de241b",
+      "size": 1793
+    },
+    {
+      "rfilename": "Qwen3-ASR-1.7B/.gitattributes",
+      "blobId": "a6344aac8c09253b3b630fb776ae94478aa0275b",
+      "size": 1519
+    },
+    {
+      "rfilename": "Qwen3-ASR-1.7B/README.md",
+      "blobId": "3a67d43f21febda213ff36efdb60ef10019af7f3",
+      "size": 57456
+    },
+    {
+      "rfilename": "Qwen3-ASR-1.7B/chat_template.json",
+      "blobId": "c44736493efd71ec96218cc626904698cdb13235",
+      "size": 1161
+    },
+    {
+      "rfilename": "Qwen3-ASR-1.7B/config.json",
+      "blobId": "2bc16c9d4ca08963715cfb94d879799b9adbd0e9",
+      "size": 6194
+    },
+    {
+      "rfilename": "Qwen3-ASR-1.7B/generation_config.json",
+      "blobId": "60ea439ede1b660c4256ebe963e54b5a3b1dbcb8",
+      "size": 128
+    },
+    {
+      "rfilename": "Qwen3-ASR-1.7B/merges.txt",
+      "blobId": "31349551d90c7606f325fe0f11bbb8bd5fa0d7c7",
+      "size": 1671853
+    },
+    {
+      "rfilename": "Qwen3-ASR-1.7B/model-00001-of-00002.safetensors",
+      "blobId": "1522f6592ff361cdc8b95692bbd8c513d68fc40a",
+      "size": 4220320824,
+      "lfs": {
+        "sha256": "a4cd1f1a04d90b757dc7f7dd26254e69a013b19e80efe590a83c6a3bde8608d6",
+        "size": 4220320824,
+        "pointerSize": 135
+      }
+    },
+    {
+      "rfilename": "Qwen3-ASR-1.7B/model-00002-of-00002.safetensors",
+      "blobId": "5a13bd2988d1368745384b4acb6e8bab73f98a75",
+      "size": 478200688,
+      "lfs": {
+        "sha256": "6e0b9d9e09e2e0238e7ef3cc8a484ab387e91b90f1900bedf88bc92d7929ccfc",
+        "size": 478200688,
+        "pointerSize": 134
+      }
+    },
+    {
+      "rfilename": "Qwen3-ASR-1.7B/model.safetensors.index.json",
+      "blobId": "1048a4eb4f21fef9aea06d8568a784b2b5595689",
+      "size": 64821
+    },
+    {
+      "rfilename": "Qwen3-ASR-1.7B/preprocessor_config.json",
+      "blobId": "8f7f07346466d5d494ec0d4969d1c3d0190eed72",
+      "size": 330
+    },
+    {
+      "rfilename": "Qwen3-ASR-1.7B/tokenizer_config.json",
+      "blobId": "b93109843922a40c6654c5449d3bf95372267c66",
+      "size": 12487
+    },
+    {
+      "rfilename": "Qwen3-ASR-1.7B/vocab.json",
+      "blobId": "4783fe10ac3adce15ac8f358ef5462739852c569",
+      "size": 2776833
+    },
+    {
+      "rfilename": "README.md",
+      "blobId": "dfa84da2a14f763b543532da6688fef40fd8db66",
+      "size": 5569
+    },
+    {
+      "rfilename": "assets/figures/mega_asr_logo.png",
+      "blobId": "1a0af426668d31b1c8dd6f7e693c4196ec9db22a",
+      "size": 1980191,
+      "lfs": {
+        "sha256": "9dcc78da3cc1ceed9952d1a932c2d4212c937220381b8c7ba13966b1238101aa",
+        "size": 1980191,
+        "pointerSize": 132
+      }
+    },
+    {
+      "rfilename": "assets/figures/method_overview.png",
+      "blobId": "cd212272e7c763caeea5e4e4b5ad7518e17a3997",
+      "size": 85828
+    },
+    {
+      "rfilename": "assets/figures/radar_results.png",
+      "blobId": "d2761fca2a6007ac066c96ffb6b3afe34e674a73",
+      "size": 1090189,
+      "lfs": {
+        "sha256": "0142016c3d0abad5d1a536fd77a3666c07b95922d2a2c21670d45a3cdd21b7a8",
+        "size": 1090189,
+        "pointerSize": 132
+      }
+    },
+    {
+      "rfilename": "audio_quality_router/best_acc_model.safetensors",
+      "blobId": "b441f02e1a666bbfda3b80d6fea3d52b470dcd80",
+      "size": 4693444,
+      "lfs": {
+        "sha256": "87a97950bd178ac9882b6ea03fd7108f79f35097286ae8e079b9d28902ed0d81",
+        "size": 4693444,
+        "pointerSize": 132
+      }
+    },
+    {
+      "rfilename": "mega-asr-merged/adapter_config.json",
+      "blobId": "403a070cb0adec3a7cc7443702e4efc7258e8c84",
+      "size": 52093
+    },
+    {
+      "rfilename": "mega-asr-merged/adapter_model.safetensors",
+      "blobId": "dbde5bcbf8993155c26a8bf07dd5aae8cae5ecb7",
+      "size": 92538896,
+      "lfs": {
+        "sha256": "7fd88dc65e59d502689323b5a296d82f3d8225a38232773963a829e387d44a31",
+        "size": 92538896,
+        "pointerSize": 133
+      }
+    },
+    {
+      "rfilename": "mega-asr-merged/mega_lora_blocks.json",
+      "blobId": "be467e9d60d2f6aebed41a35e1736a3994392db0",
+      "size": 79473
+    }
+  ],
+  "spaces": [
+    "Reza2kn/mega-asr-bench",
+    "michaelromagne/mega-vs-qwen-asr",
+    "m2iceman/mega-asr-bench-fixed"
+  ],
+  "createdAt": "2026-05-19T08:58:01.000Z",
+  "usedStorage": 5101195015
+}

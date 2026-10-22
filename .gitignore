@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+runtime/
+models/
+cache*/
+*.log
+*.tmp
+*.part
+*.sqlite*
+.env*
+settings.json
+health.json
+build/
+dist/
+releases/

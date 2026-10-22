@@ -1,0 +1,251 @@
+{
+  "format": 1,
+  "models": {
+    "parakeet": {
+      "name": "Parakeet v2",
+      "directory": "e115adf711921df9378e383d01190901f0057704",
+      "source": "FluidInference/parakeet-tdt-0.6b-v2-ov",
+      "revision": "e115adf711921df9378e383d01190901f0057704",
+      "license": "CC-BY-4.0",
+      "files": [
+        {
+          "name": "parakeet_melspectogram.xml",
+          "size": 34778,
+          "sha256": "65ee3e6a5b32eaedcd905edd9f86b07cb27ef7796a8a5ff33c800c8c8706ae28",
+          "url": "https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v2-ov/resolve/e115adf711921df9378e383d01190901f0057704/parakeet_melspectogram.xml"
+        },
+        {
+          "name": "parakeet_melspectogram.bin",
+          "size": 66700,
+          "sha256": "d49220d2836f811d426907267e64fbb935a0e3c6e4777a721b3fb375df1981e3",
+          "url": "https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v2-ov/resolve/e115adf711921df9378e383d01190901f0057704/parakeet_melspectogram.bin"
+        },
+        {
+          "name": "parakeet_encoder.xml",
+          "size": 2087694,
+          "sha256": "f190c6fa02be77e9056313649226499487f79946af81e92af63862c99b749f44",
+          "url": "https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v2-ov/resolve/e115adf711921df9378e383d01190901f0057704/parakeet_encoder.xml"
+        },
+        {
+          "name": "parakeet_encoder.bin",
+          "size": 1185869036,
+          "sha256": "c5a5af1b4e5ae02e94841a96f08b6dc3ecbf161ff7b772a4f408e14814e8493d",
+          "url": "https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v2-ov/resolve/e115adf711921df9378e383d01190901f0057704/parakeet_encoder.bin"
+        },
+        {
+          "name": "parakeet_decoder.xml",
+          "size": 35456,
+          "sha256": "debdf8b2f3136f0c6b59031a9c88a7e307b57ae622637d2438836fc8a28e365f",
+          "url": "https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v2-ov/resolve/e115adf711921df9378e383d01190901f0057704/parakeet_decoder.xml"
+        },
+        {
+          "name": "parakeet_decoder.bin",
+          "size": 14429520,
+          "sha256": "a6d5df2a0c926db666503d6ded9188e32acd663770f7ccd78f0d12d29592787e",
+          "url": "https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v2-ov/resolve/e115adf711921df9378e383d01190901f0057704/parakeet_decoder.bin"
+        },
+        {
+          "name": "parakeet_joint.xml",
+          "size": 13742,
+          "sha256": "f61e2c90f6fd9ea85acd60a5b367fc6d8933d900b4970381d7d4328b19d4532e",
+          "url": "https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v2-ov/resolve/e115adf711921df9378e383d01190901f0057704/parakeet_joint.xml"
+        },
+        {
+          "name": "parakeet_joint.bin",
+          "size": 3452956,
+          "sha256": "3e73ee839409648653b2d59ba2c614d56ca8f69e90cb42fe82f3df077a861c0f",
+          "url": "https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v2-ov/resolve/e115adf711921df9378e383d01190901f0057704/parakeet_joint.bin"
+        },
+        {
+          "name": "parakeet_vocab.json",
+          "size": 18762,
+          "sha256": "57019fe3c745772ca83a1b048a4bb951cd51329504ea33d4d83316b96e279a97",
+          "url": "https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v2-ov/resolve/e115adf711921df9378e383d01190901f0057704/parakeet_vocab.json"
+        },
+        {
+          "name": "tokenizer.model",
+          "size": 251396,
+          "sha256": "5a3a82c48998709f9bc9f5db2924d99a899d20bf82550ca52272da7c7557b0a0",
+          "url": "https://github.com/zzzi3087/npu_asr/releases/download/models-v1/5a3a82c48998709f-tokenizer.model"
+        }
+      ]
+    },
+    "qwen3-asr-1.7b": {
+      "name": "Qwen3-ASR 1.7B",
+      "directory": "qwen3-asr-1.7b-npu",
+      "source": "zhifeixie/Mega-ASR/Qwen3-ASR-1.7B@8a10bfd0cccb0c8b3be2852cae1e3ee73d6ffbf1",
+      "revision": "8a10bfd0cccb0c8b3be2852cae1e3ee73d6ffbf1",
+      "license": "Apache-2.0",
+      "files": [
+        {
+          "name": "manifest.json",
+          "size": 548,
+          "sha256": "e8999fab07c7995e1c98dbfe928cc2943d552f37498eb80a4b05326d07429f65",
+          "url": "https://github.com/zzzi3087/npu_asr/releases/download/models-v1/e8999fab07c7995e-manifest.json"
+        },
+        {
+          "name": "vocab.json",
+          "size": 2776833,
+          "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910",
+          "url": "https://github.com/zzzi3087/npu_asr/releases/download/models-v1/ca10d7e9fb3ed185-vocab.json"
+        },
+        {
+          "name": "merges.txt",
+          "size": 1671853,
+          "sha256": "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5",
+          "url": "https://github.com/zzzi3087/npu_asr/releases/download/models-v1/8831e4f1a0444713-merges.txt"
+        },
+        {
+          "name": "tokenizer_config.json",
+          "size": 12487,
+          "sha256": "4942d005604266809309cabc9f4e9cb89ce855d59b14681fdc0e1cc62ea26c4c",
+          "url": "https://github.com/zzzi3087/npu_asr/releases/download/models-v1/4942d00560426680-tokenizer_config.json"
+        },
+        {
+          "name": "config.json",
+          "size": 6194,
+          "sha256": "2e74a751548b8ad7d7526d29365ad8144c345d8b412b1152d25dc6698452712f",
+          "url": "https://github.com/zzzi3087/npu_asr/releases/download/models-v1/2e74a751548b8ad7-config.json"
+        },
+        {
+          "name": "audio-conv.xml",
+          "size": 21637,
+          "sha256": "ad796b5ca475f00954c24f9b80f64c69c4e5484dbf7aa508600cacc01b5a05ab",
+          "url": "https://github.com/zzzi3087/npu_asr/releases/download/models-v1/ad796b5ca475f009-audio-conv.xml"
+        },
+        {
+          "name": "audio-conv.bin",
+          "size": 27106632,
+          "sha256": "f4f35fa35293a84ffef0e1e1ff4d579f69df25a62a86ebabeeab5e709b03bc97",
+          "url": "https://github.com/zzzi3087/npu_asr/releases/download/models-v1/f4f35fa35293a84f-audio-conv.bin"
+        },
+        {
+          "name": "audio-encoder.xml",
+          "size": 949499,
+          "sha256": "e4b14b0e7a683242e9110deba61a07dcfa7b22e9b3df7186ec66f422a511dbe8",
+          "url": "https://github.com/zzzi3087/npu_asr/releases/download/models-v1/e4b14b0e7a683242-audio-encoder.xml"
+        },
+        {
+          "name": "audio-encoder.bin",
+          "size": 610920546,
+          "sha256": "b817a781816fa33c3828de4c8649eb96f0be56a64f367624d63201b646243de8",
+          "url": "https://github.com/zzzi3087/npu_asr/releases/download/models-v1/b817a781816fa33c-audio-encoder.bin"
+        },
+        {
+          "name": "text.xml",
+          "size": 2659485,
+          "sha256": "bead17e6df1dfaa71c1ead2f750ce18b7445f965346681534822beae3c80221e",
+          "url": "https://github.com/zzzi3087/npu_asr/releases/download/models-v1/bead17e6df1dfaa7-text.xml"
+        },
+        {
+          "name": "text.bin",
+          "size": 1722397936,
+          "sha256": "aad208088818f577656c27cfb74cc45d9478607e3a5f277a211f67d5a3c338ad",
+          "url": "https://github.com/zzzi3087/npu_asr/releases/download/models-v1/aad208088818f577-text.bin"
+        },
+        {
+          "name": "embeddings.npy",
+          "size": 622329984,
+          "sha256": "42a1b34500c54270bb1c52fd824781c623cdeb7de8d867f40c72bf50b79823c0",
+          "url": "https://github.com/zzzi3087/npu_asr/releases/download/models-v1/42a1b34500c54270-embeddings.npy"
+        }
+      ]
+    },
+    "mega-asr": {
+      "name": "Mega-ASR",
+      "directory": "mega-asr-1.7b-npu",
+      "source": "zhifeixie/Mega-ASR@8a10bfd0cccb0c8b3be2852cae1e3ee73d6ffbf1/static-robust",
+      "revision": "8a10bfd0cccb0c8b3be2852cae1e3ee73d6ffbf1",
+      "license": "Apache-2.0",
+      "files": [
+        {
+          "name": "manifest.json",
+          "size": 547,
+          "sha256": "bb031a0b4404d32bc6a56ecda8b0a3292ed412a36966f988d5c913d615b2615f",
+          "url": "https://github.com/zzzi3087/npu_asr/releases/download/models-v1/bb031a0b4404d32b-manifest.json"
+        },
+        {
+          "name": "vocab.json",
+          "size": 2776833,
+          "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910",
+          "url": "https://github.com/zzzi3087/npu_asr/releases/download/models-v1/ca10d7e9fb3ed185-vocab.json"
+        },
+        {
+          "name": "merges.txt",
+          "size": 1671853,
+          "sha256": "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5",
+          "url": "https://github.com/zzzi3087/npu_asr/releases/download/models-v1/8831e4f1a0444713-merges.txt"
+        },
+        {
+          "name": "tokenizer_config.json",
+          "size": 12487,
+          "sha256": "4942d005604266809309cabc9f4e9cb89ce855d59b14681fdc0e1cc62ea26c4c",
+          "url": "https://github.com/zzzi3087/npu_asr/releases/download/models-v1/4942d00560426680-tokenizer_config.json"
+        },
+        {
+          "name": "config.json",
+          "size": 6194,
+          "sha256": "2e74a751548b8ad7d7526d29365ad8144c345d8b412b1152d25dc6698452712f",
+          "url": "https://github.com/zzzi3087/npu_asr/releases/download/models-v1/2e74a751548b8ad7-config.json"
+        },
+        {
+          "name": "audio-conv.xml",
+          "size": 21637,
+          "sha256": "ad796b5ca475f00954c24f9b80f64c69c4e5484dbf7aa508600cacc01b5a05ab",
+          "url": "https://github.com/zzzi3087/npu_asr/releases/download/models-v1/ad796b5ca475f009-audio-conv.xml"
+        },
+        {
+          "name": "audio-conv.bin",
+          "size": 27106632,
+          "sha256": "1884d5eecde9ab7784ee8216cf172069b9c417d5d0db018dbf2c89fd84ada22d",
+          "url": "https://github.com/zzzi3087/npu_asr/releases/download/models-v1/1884d5eecde9ab77-audio-conv.bin"
+        },
+        {
+          "name": "audio-encoder.xml",
+          "size": 949499,
+          "sha256": "e4b14b0e7a683242e9110deba61a07dcfa7b22e9b3df7186ec66f422a511dbe8",
+          "url": "https://github.com/zzzi3087/npu_asr/releases/download/models-v1/e4b14b0e7a683242-audio-encoder.xml"
+        },
+        {
+          "name": "audio-encoder.bin",
+          "size": 610920546,
+          "sha256": "300a32a8d35e2e613e2fbb6692320957ab8b03de61b622d128b047ae333dfd24",
+          "url": "https://github.com/zzzi3087/npu_asr/releases/download/models-v1/300a32a8d35e2e61-audio-encoder.bin"
+        },
+        {
+          "name": "text.xml",
+          "size": 2659485,
+          "sha256": "bead17e6df1dfaa71c1ead2f750ce18b7445f965346681534822beae3c80221e",
+          "url": "https://github.com/zzzi3087/npu_asr/releases/download/models-v1/bead17e6df1dfaa7-text.xml"
+        },
+        {
+          "name": "text.bin",
+          "size": 1722397936,
+          "sha256": "deaffdf56a8d697795eb77c4658aa09909bb96dae8b304065d971de95b671a53",
+          "url": "https://github.com/zzzi3087/npu_asr/releases/download/models-v1/deaffdf56a8d6977-text.bin"
+        },
+        {
+          "name": "embeddings.npy",
+          "size": 622329984,
+          "sha256": "42a1b34500c54270bb1c52fd824781c623cdeb7de8d867f40c72bf50b79823c0",
+          "url": "https://github.com/zzzi3087/npu_asr/releases/download/models-v1/42a1b34500c54270-embeddings.npy"
+        }
+      ]
+    },
+    "silero-vad": {
+      "name": "语音活动检测",
+      "directory": "silero-vad",
+      "source": "snakers4/silero-vad",
+      "revision": "vendored-sha256",
+      "license": "MIT",
+      "files": [
+        {
+          "name": "silero_vad.onnx",
+          "size": 2327524,
+          "sha256": "1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3",
+          "url": "https://github.com/zzzi3087/npu_asr/releases/download/models-v1/1a153a22f4509e29-silero_vad.onnx"
+        }
+      ]
+    }
+  }
+}
