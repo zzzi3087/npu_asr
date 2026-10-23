@@ -35,6 +35,19 @@ def main():
         w.on_event('download',{'model':'fixture','file':'fixture','completed':50,'total':100,'stage':'download'})
         assert w.start.text()=='取消下载';w.on_event('download_done',{})
         result['gui_created']=True
+        from theme import PRESETS
+        from settings_dialog import SettingsDialog
+        from PySide6.QtCore import Qt
+        dialog=SettingsDialog(w.settings,w)
+        dialog.theme_preview.connect(w.apply_colors)
+        dialog.theme_editor.choose_preset('米纸')
+        assert len(dialog.theme_editor.cards)==4 and w.colors==PRESETS['米纸']
+        dialog.theme_editor.follow.setChecked(True)
+        dialog.theme_editor.system_changed(True)
+        assert w.colors==PRESETS['暖岩']
+        assert dialog.draft()['theme']=={'follow_system':True,'family':'warm'}
+        dialog.reject();dialog.deleteLater();w.apply_display();qt.processEvents()
+        result['four_palettes_and_system_theme']=True
         w.open_files();qt.processEvents()
         assert w.file_dialog.tree.columnCount()==4 and w.file_dialog.normalize.text()=='自动调整响度'
         live_model=w.settings['asr_model']

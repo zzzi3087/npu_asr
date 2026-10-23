@@ -3,7 +3,7 @@ import copy,json,math,re,uuid
 from pathlib import Path
 from urllib.parse import urlsplit,urlunsplit,parse_qsl,urlencode
 from storage import default_settings
-from theme import DEFAULT_COLORS,normalize_colors
+from theme import DEFAULT_COLORS,normalize_colors,normalize_theme
 from typography import normalize_typography
 from languages import LANGUAGES
 from audio_gain import DEFAULT_AGC,normalize_agc
@@ -60,6 +60,7 @@ def validate_configuration(value):
     result['desktop_captions']=normalize_desktop_captions(result['desktop_captions'],strict=True)
     result['audio_source']=normalize_audio_source(value.get('audio_source'),strict=True,legacy=result.get('microphone_name',''))
     result['colors']=checked_colors(result['colors'])
+    result['theme']=normalize_theme(result.get('theme'),strict=True)
     themes=result['saved_themes']
     if not isinstance(themes,list) or len(themes)>100:raise ValueError('自定义配色方案数量无效')
     result['saved_themes']=[];theme_ids=set();names=set()

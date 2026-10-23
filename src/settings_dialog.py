@@ -222,7 +222,7 @@ class SettingsDialog(QDialog):
         appearance.insertRow(1,Foldout('音量增益',gain_page))
         tabs.addTab(scroll_page(display),'收音设置')
         tabs.addTab(workbench,'工作台字体')
-        self.theme_editor=ThemeEditor(settings.get('colors'),themes=settings.get('saved_themes',[]))
+        self.theme_editor=ThemeEditor(settings.get('colors'),themes=settings.get('saved_themes',[]),options=settings.get('theme'))
         self.theme_editor.preview_changed.connect(self.theme_preview.emit)
         tabs.addTab(self.theme_editor,'工作台配色')
         tabs.addTab(scroll_page(advanced),'接口高级参数')
@@ -407,7 +407,8 @@ class SettingsDialog(QDialog):
             close_to_tray=self.close_to_tray.isChecked(),minimize_to_tray=self.minimize_to_tray.isChecked(),
             opacity=self.opacity.value(),topmost=self.topmost.isChecked(),quiet=self.quiet.isChecked(),
             interval=self.interval.currentData(),segmentation=self.segmentation.currentData(),
-            colors=self.theme_editor.validated_colors(),saved_themes=copy.deepcopy(self.theme_editor.saved_themes))
+            colors=self.theme_editor.validated_colors(),theme=dict(self.theme_editor.options),
+            saved_themes=copy.deepcopy(self.theme_editor.saved_themes))
         return result
 
     def export_config(self):
@@ -439,7 +440,8 @@ class SettingsDialog(QDialog):
         agc=normalize_agc(settings.get('agc'));self.agc_enabled.setChecked(agc['enabled'])
         for key,field in self.agc_fields.items():field.setValue(agc[key])
         self.typography_editor.set_values(settings,emit=True)
-        self.theme_editor.set_themes(settings['saved_themes']);self.theme_editor.set_colors(settings['colors'])
+        self.theme_editor.set_themes(settings['saved_themes'])
+        self.theme_editor.set_configuration(settings['colors'],settings.get('theme'))
         self.domain_editor.set_values(settings.get('domain_bias'))
         self.desktop_editor.set_values(settings.get('desktop_captions'),emit=True)
         self.audio_source_editor.set_values(settings.get('audio_source'))

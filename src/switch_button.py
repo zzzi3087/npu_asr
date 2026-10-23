@@ -17,7 +17,7 @@ class SwitchButton(QAbstractButton):
         track=QRectF(self.width()-50,(self.height()-24)/2,44,24)
         painter.setPen(Qt.PenStyle.NoPen);painter.setBrush(p.color(QPalette.ColorRole.Link if self.isChecked() else QPalette.ColorRole.Mid))
         painter.drawRoundedRect(track,12,12)
-        painter.setBrush(p.color(QPalette.ColorRole.HighlightedText));x=track.right()-21 if self.isChecked() else track.left()+3
+        painter.setBrush(p.color(QPalette.ColorRole.Window if self.isChecked() else QPalette.ColorRole.WindowText));x=track.right()-21 if self.isChecked() else track.left()+3
         painter.drawEllipse(QRectF(x,track.top()+3,18,18))
         if self.hasFocus():
             painter.setBrush(Qt.BrushStyle.NoBrush);painter.setPen(QPen(p.color(QPalette.ColorRole.Link),1,Qt.PenStyle.DashLine));painter.drawRoundedRect(self.rect().adjusted(1,1,-1,-1),5,5)

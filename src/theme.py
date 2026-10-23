@@ -38,23 +38,72 @@ COLOR_ROLES = [
     ('提示','tooltip_bg','工具提示背景','#182537'),
     ('提示','tooltip_text','工具提示文字','#dce5f0'),
 ]
-DEFAULT_COLORS={key:value for _,key,_,value in COLOR_ROLES}
-LIGHT_COLORS=dict(DEFAULT_COLORS,window_bg='#f4f6fa',sidebar_bg='#e7edf4',panel_bg='#ffffff',
-    subtitle_bg='#ffffff',preview_bg='#e8f4ef',input_bg='#ffffff',menu_bg='#ffffff',
-    text='#243449',heading='#14263d',muted='#5b6d83',disabled_text='#8994a3',
-    english='#14263d',chinese='#086c56',preview_text='#49627a',subtitle_meta='#61758b',warning='#926019',
-    accent='#087e67',accent_hover='#096952',accent_text='#ffffff',accent_bg='#d6eee6',success='#087258',
-    button_bg='#f0f4f8',hover_bg='#dce7ef',disabled_bg='#e9edf2',selected_bg='#d0e9e0',
-    selected_text='#173f35',border='#cad5e1',border_hover='#829ab1',scrollbar='#a6b6c7',track='#dce4ed',
-    tooltip_bg='#243449',tooltip_text='#ffffff')
-WARM_COLORS=dict(LIGHT_COLORS,window_bg='#f4eee3',sidebar_bg='#e9dfce',panel_bg='#fffaf1',
-    subtitle_bg='#fffaf1',preview_bg='#eee5d5',input_bg='#fffaf1',menu_bg='#fffaf1',
-    text='#483e32',heading='#332a21',muted='#776955',english='#332a21',chinese='#56683a',
-    preview_text='#76674e',subtitle_meta='#89765b',accent='#687b47',accent_hover='#536436',
-    accent_bg='#e1e7d1',success='#526b36',button_bg='#f1e7d5',hover_bg='#e4d6bc',
-    selected_bg='#e0e6cc',selected_text='#344322',border='#d3c4aa',border_hover='#a99777',
-    scrollbar='#beac8b',track='#e2d7c3')
-PRESETS={'深海夜色':DEFAULT_COLORS,'明亮简洁':LIGHT_COLORS,'暖色纸张':WARM_COLORS}
+# Four complete palettes, in light/dark pairs. Keep color semantics consistent:
+# neutral reading surfaces, restrained translated text, and a distinct action color.
+PALETTE_VALUES={
+    # role                 Mist       Ink        Paper      Stone
+    'window_bg':          ('#f4f5f7','#181b20','#f4f0e9','#211f1d'),
+    'sidebar_bg':         ('#eceef2','#14171b','#eae4da','#1b1917'),
+    'panel_bg':           ('#fafbfc','#22262d','#fbf7f0','#2b2824'),
+    'subtitle_bg':        ('#fafbfc','#1c2026','#fbf7f0','#25221f'),
+    'preview_bg':         ('#e9edf3','#242a33','#eee7dc','#302b26'),
+    'input_bg':           ('#ffffff','#1a1e24','#fffaf3','#211e1b'),
+    'menu_bg':            ('#fafbfc','#242830','#fbf7f0','#2b2824'),
+    'text':               ('#303945','#d6dce5','#403b35','#e0d7ce'),
+    'heading':            ('#202833','#edf1f7','#292621','#f3eae0'),
+    'muted':              ('#626d7b','#9ca7b7','#6d6459','#b0a396'),
+    'disabled_text':      ('#87909b','#687383','#978c7e','#7f7369'),
+    'english':            ('#202833','#edf1f7','#292621','#f3eae0'),
+    'chinese':            ('#476584','#a4bddc','#79583d','#d3b99b'),
+    'preview_text':       ('#52647b','#b0bfd3','#6e5c49','#c6b4a2'),
+    'subtitle_meta':      ('#647182','#99a4b4','#7b6d5d','#aa9b8c'),
+    'warning':            ('#966015','#e9bf7a','#915523','#e8b57e'),
+    'accent':             ('#355f98','#9bbbe8','#985737','#dfb18b'),
+    'accent_hover':       ('#294d80','#bad0ef','#7e442a','#ecc6a5'),
+    'accent_text':        ('#ffffff','#18263a','#ffffff','#302319'),
+    'accent_bg':          ('#e3ecea','#22332f','#e4e9de','#2c3529'),
+    'success':            ('#2e685a','#9bc9b5','#4d6947','#b4c7a4'),
+    'button_bg':          ('#f9fafc','#272d36','#faf6ef','#302b26'),
+    'hover_bg':           ('#e2e7ef','#323c4b','#e8ddce','#40362d'),
+    'disabled_bg':        ('#e9edf1','#22272e','#eae3d9','#2b2622'),
+    'selected_bg':        ('#dce5f2','#2b3b53','#ebdccb','#493829'),
+    'selected_text':      ('#2c4567','#dce8fa','#65442e','#f2dfcc'),
+    'border':             ('#d6dce4','#353c47','#dcd2c5','#443c34'),
+    'border_hover':       ('#8c9cb2','#75869d','#a68d76','#99816b'),
+    'scrollbar':          ('#a3afbf','#566375','#b9a792','#716151'),
+    'track':              ('#dfe5ed','#343e4e','#e3d8c9','#46392d'),
+    'tooltip_bg':         ('#303945','#353f4d','#403b35','#433a31'),
+    'tooltip_text':       ('#fafbfc','#edf1f7','#fbf7f0','#f3eae0'),
+}
+PRESET_NAMES=('雾白','墨夜','米纸','暖岩')
+PRESETS={name:{key:values[index] for key,values in PALETTE_VALUES.items()}
+    for index,name in enumerate(PRESET_NAMES)}
+THEME_FAMILIES={'neutral':('中性灰蓝','雾白','墨夜'),'warm':('柔和暖色','米纸','暖岩')}
+PRESET_DESCRIPTIONS=('浅灰 · 雾蓝','石墨 · 灰蓝','米白 · 棕褐','暖灰 · 琥珀')
+DEFAULT_COLORS=PRESETS['雾白']
+COLOR_ROLES=[(group,key,label,DEFAULT_COLORS[key]) for group,key,label,_ in COLOR_ROLES]
+
+
+def normalize_theme(value=None,strict=False):
+    if value is None:return {'follow_system':False,'family':'neutral'}
+    if not isinstance(value,dict):
+        if strict:raise ValueError('配色模式必须是对象')
+        value={}
+    follow=value.get('follow_system',False);family=value.get('family','neutral')
+    if type(follow) is not bool:
+        if strict:raise ValueError('跟随系统须为布尔值')
+        follow=False
+    if not isinstance(family,str) or family not in THEME_FAMILIES:
+        if strict:raise ValueError('不支持的配色组')
+        family='neutral'
+    return {'follow_system':follow,'family':family}
+
+
+def effective_colors(colors,options=None,dark=False):
+    options=normalize_theme(options)
+    if options['follow_system']:
+        return dict(PRESETS[THEME_FAMILIES[options['family']][2 if dark else 1]])
+    return normalize_colors(colors)
 
 
 def normalize_colors(values=None):

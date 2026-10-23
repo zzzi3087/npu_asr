@@ -28,7 +28,8 @@ from tray_controller import TrayController
 from file_queue import FileQueue,LABELS as FILE_LABELS
 from PySide6.QtGui import QIcon
 
-from theme import STYLE,apply_theme,normalize_colors
+from theme import STYLE,apply_theme,normalize_colors,effective_colors,normalize_theme
+from system_theme import SystemTheme
 from typography import normalize_typography,make_font,render_captions
 
 
@@ -47,7 +48,9 @@ class Window(QMainWindow):
         self.resize(1220,830)
         self.setMinimumSize(860,620)
         self.settings=load_settings()
-        self.colors=normalize_colors(self.settings.get('colors'))
+        self.system_theme=SystemTheme(self)
+        self.system_theme.changed.connect(self.on_system_theme)
+        self.colors=effective_colors(self.settings.get('colors'),self.settings.get('theme'),self.system_theme.dark)
         self.appearance={key:self.settings[key] for key in ('typography','english_size','chinese_size')}
         self.history=History(recover=True)
         self.current_session=self.view_session=None
@@ -303,7 +306,7 @@ class Window(QMainWindow):
         self.refresh_source_summary()
         self.desktop.configure(self.settings.get('desktop_captions'))
         self.sync_desktop_controls()
-        self.apply_colors(self.settings.get('colors'))
+        self.apply_colors(effective_colors(self.settings.get('colors'),self.settings.get('theme'),self.system_theme.dark))
         visible=self.isVisible()
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint,self.settings['topmost'])
         self.setWindowOpacity(self.settings['opacity']/100)
@@ -452,7 +455,14 @@ class Window(QMainWindow):
     def refresh_desktop_partial(self):
         if not self.closing:self.desktop.set_partial(self.last_partial,self.capturing)
 
-    def apply_colors(self,colors):
+    def on_system_theme(self,dark):
+        if self.closing:return
+        if self.dialog is not None:
+            self.dialog.theme_editor.system_changed(dark)
+        elif normalize_theme(self.settings.get('theme'))['follow_system']:
+            self.apply_colors(effective_colors(self.settings.get('colors'),self.settings.get('theme'),dark),force=False)
+
+    def apply_colors(self,colors,force=True):
         self.colors=normalize_colors(colors)
         t=normalize_typography(self.appearance.get('typography'))
         apply_theme(QApplication.instance(),self.colors,t)
@@ -465,7 +475,7 @@ class Window(QMainWindow):
         self.preview_layout.setSpacing(4)
         self.notice.setStyleSheet(f'color:{self.colors["success"]};padding:0;')
         self.translation_warning.setStyleSheet(f'color:{self.colors["warning"]};padding:0;')
-        self.render_now(force=True)
+        self.render_now(force=force)
 
     def preview_typography(self,appearance):
         self.appearance=dict(appearance)
@@ -838,6 +848,8 @@ class Window(QMainWindow):
             self.dialog.raise_()
             return
         self.dialog=SettingsDialog(self.settings,self)
+        self.dialog.theme_editor.dark=self.system_theme.dark
+        self.dialog.theme_editor.refresh_mode(emit=False)
         self.dialog.tabs.setCurrentIndex(self.last_settings_page)
         if page=='audio':self.dialog.tabs.setCurrentIndex(1)
         self.dialog.test_requested.connect(self.test_connection)

@@ -7,7 +7,7 @@ import sqlite3
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from theme import DEFAULT_COLORS,normalize_colors
+from theme import DEFAULT_COLORS,normalize_colors,normalize_theme
 from typography import default_typography,normalize_typography
 from audio_gain import DEFAULT_AGC,normalize_agc
 from domain_bias import default_domain_bias,normalize_domain_bias
@@ -30,7 +30,7 @@ def default_settings():
         'asr_model':'parakeet','source_language':'auto','target_language':'简体中文','agc':dict(DEFAULT_AGC),'feature_backend':'numpy','domain_bias':default_domain_bias(),'desktop_captions':default_desktop_captions(),
         'english_size': 24, 'chinese_size': 22, 'opacity': 100, 'topmost': False,
         'quiet': True, 'interval': 1.5, 'segmentation': 'balanced', 'colors':dict(DEFAULT_COLORS),
-        'saved_themes':[], 'typography':default_typography(), 'microphone_name': '', 'audio_source':normalize_audio_source(), 'profiles': [
+        'theme':normalize_theme(), 'saved_themes':[], 'typography':default_typography(), 'microphone_name': '', 'audio_source':normalize_audio_source(), 'profiles': [
             {'id': 'deepseek', 'name': 'DeepSeek', 'protocol': 'openai',
              'base_url': 'https://api.deepseek.com', 'model': 'deepseek-flash',
              'auth': 'auto', 'api_version': '2023-06-01', 'workspace': '',
@@ -52,6 +52,7 @@ def load_settings(directory=DATA):
         saved = json.loads(path.read_text('utf-8'))
         defaults.update({k: v for k, v in saved.items() if k in defaults})
     defaults['colors']=normalize_colors(defaults.get('colors'))
+    defaults['theme']=normalize_theme(defaults.get('theme'))
     defaults['typography']=normalize_typography(defaults.get('typography'))
     if saved and saved.get('main_layout_version',1)<2:
         defaults['typography']['preview_height']=min(40,defaults['typography']['preview_height'])
@@ -72,6 +73,7 @@ def save_settings(settings, directory=DATA):
     # Keys are not accepted by the settings schema; they live in Credential Manager.
     clean = {k: settings.get(k,value) for k,value in default_settings().items()}
     clean['colors']=normalize_colors(settings.get('colors'))
+    clean['theme']=normalize_theme(settings.get('theme'))
     clean['typography']=normalize_typography(settings.get('typography'))
     clean['agc']=normalize_agc(settings.get('agc'))
     clean['domain_bias']=normalize_domain_bias(settings.get('domain_bias'))
