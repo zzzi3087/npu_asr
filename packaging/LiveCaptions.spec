@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 from PyInstaller.utils.hooks import collect_all,collect_dynamic_libs,collect_data_files,copy_metadata
 root=Path(SPECPATH).parent
 source=root/'src'
@@ -9,6 +10,10 @@ data=ov_data+collect_data_files('onnxruntime')+collect_data_files('_sounddevice_
 for package in ('openvino','keyring','tokenizers'):data+=copy_metadata(package)
 data+=[(str(root/'resources'/'model-catalog.json'),'.'),(str(root/'resources'/'assets'/'app.ico'),'assets'),
     (str(root/'licenses'/'third-party'),'third-party-licenses'),(str(root/'licenses'/'THIRD_PARTY_NOTICES.md'),'.')]
+media=Path(os.environ.get('LIVE_CAPTIONS_MEDIA_DIR',root/'build'/'media-tools'))
+if not (media/'bin'/'ffmpeg.exe').is_file() or not (media/'bin'/'ffprobe.exe').is_file():
+    raise RuntimeError('Run python tools/prepare_media_tools.py before packaging')
+data+=[(str(media),'media-tools')]
 weights={'.onnx','.bin','.npy','.npz','.model','.safetensors','.pt','.pth'}
 data=[(source,target) for source,target in data if Path(source).suffix.lower() not in weights]
 a=Analysis([str(source/'frozen_entry.py')],pathex=[str(source)],binaries=ov_bins+collect_dynamic_libs('onnxruntime'),

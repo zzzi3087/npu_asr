@@ -17,6 +17,16 @@ license terms and replacement rights continue to apply.
   https://www.qt.io/qt-for-python and https://download.qt.io/archive/qt/
 - Python: PSF license. https://www.python.org/downloads/source/
 - ONNX Runtime: MIT. https://github.com/microsoft/onnxruntime
+- FFmpeg: LGPL-3.0-or-later shared build (BtbN, --enable-version3, no GPL/nonfree
+  variant). Launched as a separate command-line process for local media analysis
+  and decoding; the shared libraries may be replaced with compatible builds.
+  Its license is in `media-tools/LICENSE.txt` in the Windows distribution;
+  GPL-3.0 and LGPL-3.0 texts are also in `third-party-licenses/`.
+  Pinned FFmpeg source: https://github.com/FFmpeg/FFmpeg/tree/29e619e767
+  Build recipes and dependencies: https://github.com/BtbN/FFmpeg-Builds/tree/autobuild-2026-09-30-13-08
+  Binary provenance and archive hash: `resources/media-tools.json` in source,
+  `media-tools/BUILD.json` in the distribution. FFmpeg authors and contributors
+  retain copyright; this program does not modify the FFmpeg binaries.
 - NumPy, Requests, SentencePiece, Tokenizers, SoundDevice, SoundFile, soxr,
   PyAudioWPatch, Keyring and their dependencies retain their respective licenses.
 

@@ -105,6 +105,7 @@ class History:
                 provider TEXT NOT NULL DEFAULT '', model TEXT NOT NULL DEFAULT '',
                 UNIQUE(session_id, seq));
             CREATE INDEX IF NOT EXISTS segment_session ON segments(session_id, seq);
+            CREATE INDEX IF NOT EXISTS segment_pending ON segments(session_id,status,seq);
             CREATE INDEX IF NOT EXISTS session_date ON sessions(created_at DESC);
         ''')
         columns={r[1] for r in self.db.execute('PRAGMA table_info(segments)')}
@@ -195,8 +196,14 @@ class History:
     def retryable(self, sid):
         return [dict(r) for r in self.db.execute("SELECT * FROM segments WHERE session_id=? AND status IN ('failed','disabled','interrupted') ORDER BY seq",(sid,))]
 
-    def queued(self, sid):
-        return [dict(r) for r in self.db.execute("SELECT * FROM segments WHERE session_id=? AND status='queued' ORDER BY seq",(sid,))]
+    def queued(self, sid,limit=None):
+        sql="SELECT * FROM segments WHERE session_id=? AND status='queued' ORDER BY seq"
+        args=[sid]
+        if limit is not None:sql+=' LIMIT ?';args.append(max(1,int(limit)))
+        return [dict(r) for r in self.db.execute(sql,args)]
+
+    def fail_queued(self,sid,error):
+        with self.db:self.db.execute("UPDATE segments SET status='failed',error=? WHERE session_id=? AND status='queued'",(error,sid))
 
     def close(self):
         self.db.close()

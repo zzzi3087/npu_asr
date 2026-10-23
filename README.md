@@ -6,13 +6,14 @@ Windows 桌面实时转录与翻译软件。支持麦克风和桌面音频、双
 
 ## 安装与使用
 
-1. 在 [Releases](https://github.com/zzzi3087/npu_asr/releases/latest) 下载 `LiveCaptions-0.1.3-win64-setup.exe` 并安装。更新前先在托盘菜单选择“退出”。也可下载 portable ZIP，完整解压后运行 `LiveCaptions.exe`。
+1. 在 [Releases](https://github.com/zzzi3087/npu_asr/releases/latest) 下载 `LiveCaptions-0.2.0-win64-setup.exe` 并安装。更新前先在托盘菜单选择“退出”。也可下载 portable ZIP，完整解压后运行 `LiveCaptions.exe`。
 2. 需要 Windows 11 x64、兼容 OpenVINO 的 **Intel NPU** 和已安装的 Intel NPU 驱动。软件自带运行库，不需要另装 Python。不同型号、驱动的编译兼容性可能不同；没有 NPU 时不会改用 CPU/GPU 转录。
 3. 首次启动检查模型；缺少的文件自动下载，并显示进度。可取消并在下次续传。下载后校验 SHA-256，完整模型会复用；首次 NPU 编译也需要等待。
 4. 在设置中选择模型、源语言、翻译语言和收音设备。顶部的音频来源可快速切换麦克风/桌面音频，点击“开始收音”开始。
 5. 翻译需要在设置的云服务页面填写自己的 API 地址、模型和密钥。兼容 OpenAI Chat Completions 和 Anthropic Messages 格式。仅转录时可关闭翻译，无需 API Key。
 6. 默认关闭或最小化主窗口后转入右下角系统托盘，任务栏窗口隐藏，收音、翻译和桌面字幕继续运行。点击托盘图标恢复窗口；右键可停止收音、切换桌面字幕、进入设置或完全退出。图标可能在 Windows 的隐藏图标菜单中。
 7. 在“设置 → 后台与托盘”可分别关闭上述行为。再次双击程序会恢复已有窗口，不会重复启动转录进程。
+8. 转录本地文件时，点击左侧“音频文件 · 队列”，添加或拖入文件；可一次添加多个，查看进度、调整顺序、暂停队列、取消和重试。双击任务或点“查看字幕”可进入历史记录并导出。
 
 安装程序当前没有代码签名证书。仅从本仓库 Releases 获取程序，并可用同页的 `SHA256SUMS.txt` 核对文件。
 
@@ -33,6 +34,7 @@ Parakeet 首次下载约 1.2 GB，Qwen/Mega 各约 3 GB；相同文件尽量复�
 
 ## 功能
 
+- 本地音频批量转录，队列与每文件历史保存，支持 WAV、MP3、M4A/AAC、FLAC、OGG/Opus 等，也可读取视频的首条音轨。
 - 系统托盘后台运行；隐藏时暂缓主页字幕排版，无动画或常驻轮询定时器。
 - 设置窗口右上角显示当前程序版本，切换设置页面时始终可见，可选择复制。
 - 多语言转录和翻译；Parakeet v2 仅支持英语，多语言使用 Qwen/Mega。
@@ -45,12 +47,27 @@ Parakeet 首次下载约 1.2 GB，Qwen/Mega 各约 3 GB；相同文件尽量复�
 - 自定义全局配色、保存主题、配置导入/导出。
 - 停止收音时不持续进行 ASR 推理；下载进度和界面刷新节流，无持续动画。
 
+## 本地文件与预处理
+
+Windows 安装包和便携版自带 FFmpeg/ffprobe，无需额外安装。每个文件显示“检查响度 → 预处理 → NPU 转录”的阶段进度与总体进度；模型首次下载/加载也会在主页显示。
+
+- 转录前测量时长、采样率、声道、LUFS、真峰值、RMS 和直流偏置。
+- 默认按需做恒定音量缩放：目标约 −20 LUFS，偏差不足 2 dB 时通常保持原音量；提升最多 24 dB，且受 −2 dBTP 峰值余量限制。受峰值或增益限制时可能达不到目标，识别阶段仍可使用已有的动态增益设置。
+- 静音不放大；已削波的文件显示提示。混合声道出现明显抵消时自动选取较强声道，避免反相立体声把语音抵消。
+- 统一为 16 kHz 单声道浮点 PCM；兼容且无需调整的 WAV 直接复用。可选 80 Hz 低频过滤，默认关闭；不默认做强降噪、不剪静音、不改变播放速度或时间轴，原文件不会被改写。
+- 分块读取，临时缓存每小时约 230 MB，任务结束/取消后清理。队列暂停会等待当前文件结束；“取消当前”会终止 FFmpeg，或等待正在执行的 NPU 推理结束，已生成字幕保留。
+- 文件与实时收音串行使用同一个 NPU。收音时添加的文件先排队，停止收音后开始；也可暂停文件队列再收音。翻译在后台继续，显示“转录完成”不表示网络翻译已经全部结束。
+- 队列只在本机保存文件路径和任务配置，重启后等待用户继续；中断项可重试，会生成新的历史记录，不覆盖上次已保存的字幕。
+
+所有 ASR 网络仍仅在 NPU 执行。FFmpeg 解码、响度分析、采样转换和轻量 VAD 使用 CPU；FFmpeg 使用低优先级和受限线程，不引入常驻后台进程。
+
 ## 隐私与本地数据
 
 - 麦克风/桌面音频在本机转录，程序不向云端发送音频，不默认保存录音。
 - 开启翻译后，字幕文字及有限上下文会发送至你设置的服务地址。使用前请确认该服务符合你的需求。
 - API Key 存放在 Windows 凭据管理器，不写入普通设置文件或配置导出。历史字幕与设置存在本机用户目录；导出历史时会包含所选字幕。
 - 下载只访问清单所列的公开模型地址，不附带翻译服务密钥。
+- 本地文件的音频内容和队列路径不上传；若启用翻译，转录后的文字仍会发给你配置的服务。
 - 发布源码采用独立的干净历史，仅含程序、构建脚本和公共资源。个人配置、字幕历史、录音、缓存、日志、旧开发报告均不发布。
 
 ## 从源码运行和构建
@@ -62,11 +79,14 @@ python -m pip install -r requirements/runtime.txt
 python main.py
 ```
 
+源码运行本地文件功能还需要 `ffmpeg`、`ffprobe` 在 PATH 中，也可将 `PARAKEET_FFMPEG_DIR` 指向包含这两个程序的目录。
+
 构建 Windows 包需要同一运行环境、`packaging/requirements-build.txt` 和 Inno Setup 7：
 
 ```powershell
 python -m pip install -r packaging/requirements-build.txt
 python tools/prepare_build.py
+python tools/prepare_media_tools.py
 python -m PyInstaller --noconfirm packaging/LiveCaptions.spec
 ISCC /DBundleDir="<absolute-path-to-dist/LiveCaptions>" /DReleaseDir="<absolute-output-folder>" packaging/installer.iss
 ```
@@ -90,6 +110,8 @@ licenses/      第三方许可与版权说明
 
 ```powershell
 python tests/check_model_downloads.py
+python tests/check_file_processing.py
+python tests/check_file_queue.py
 python tests/check_caption_visibility.py
 python tests/check_tray.py
 python tests/check_main_layout.py
@@ -103,7 +125,6 @@ python tests/check_ui_stability.py
 ## 更新预告:
 下个版本将会加入:
 多语言支持
-转录本地音频文件
 省电优化
 界面优化
 

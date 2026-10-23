@@ -25,6 +25,7 @@ from workspace_header import WorkspaceHeader
 from app_paths import RESOURCE_DIR
 from caption_visibility import caption_visibility
 from tray_controller import TrayController
+from file_queue import FileQueue,LABELS as FILE_LABELS
 from PySide6.QtGui import QIcon
 
 from theme import STYLE,apply_theme,normalize_colors
@@ -53,11 +54,17 @@ class Window(QMainWindow):
         self.capturing=self.closing=self.ready=False
         self._exit_requested=self._closed=self._in_tray=self._tray_dialog_hidden=False
         self.tray=None
+        self.file_queue=FileQueue(self)
+        self.file_dialog=None;self._tray_file_hidden=False
+        self.file_queue.dispatch.connect(self.begin_file)
+        self.file_queue.changed.connect(self.on_file_queue_changed)
+        self.file_queue.error.connect(self.notify)
         self.active_source=None
         self.downloading=False
         self.translation_available=None;self.translation_error=''
         self.autostart=autostart
         self.active_jobs=set()
+        self.translation_sessions={}
         self.history_rows={}
         self.history_menu_sid=None
         self.source_choices={self.settings['audio_source']['kind']:dict(self.settings['audio_source'])}
@@ -108,6 +115,10 @@ class Window(QMainWindow):
         self.new_button=QPushButton('＋  新建字幕')
         self.new_button.clicked.connect(self.new_session_view)
         side.addWidget(self.new_button)
+        self.files_button=QPushButton('音频文件 · 队列')
+        self.files_button.setToolTip('添加本地音频、查看预处理和 NPU 转录进度')
+        self.files_button.clicked.connect(self.open_files)
+        side.addWidget(self.files_button)
         label=QLabel('历史记录')
         label.setObjectName('eyebrow')
         side.addWidget(label)
@@ -341,6 +352,8 @@ class Window(QMainWindow):
         if self.closing or not self.tray or not self.tray.available:return False
         if self.dialog and self.dialog.isVisible():
             self._tray_dialog_hidden=True;self.dialog.hide()
+        if self.file_dialog and self.file_dialog.isVisible():
+            self._tray_file_hidden=True;self.file_dialog.hide()
         self._in_tray=True;self.hide();self.sync_tray()
         return True
 
@@ -349,6 +362,8 @@ class Window(QMainWindow):
         self._in_tray=False;self.showNormal();self.raise_();self.activateWindow()
         if self._tray_dialog_hidden and self.dialog:
             self._tray_dialog_hidden=False;self.dialog.show()
+        if self._tray_file_hidden and self.file_dialog:
+            self._tray_file_hidden=False;self.file_dialog.show()
         if self.dialog and self.dialog.isVisible():
             self.dialog.raise_();self.dialog.activateWindow()
         elif self.workbench_dirty:self.render_now(force=True)
@@ -367,6 +382,10 @@ class Window(QMainWindow):
         self.close()
 
     def refresh_source_summary(self):
+        if self.file_queue.active:
+            job=self.file_queue.find(self.file_queue.active)
+            self.source_summary.setText('音频来源：本地文件')
+            self.source_summary.setToolTip(job['name']+'；收音设备选择在文件任务结束后生效');return
         self.source_choices[self.settings['audio_source']['kind']]=dict(self.settings['audio_source'])
         source=self.active_source if self.capturing and self.active_source else self.settings['audio_source']
         self.source_summary.setText('音频来源：'+('桌面音频' if source['kind']=='desktop' else '麦克风'))
@@ -466,7 +485,7 @@ class Window(QMainWindow):
         self.provider_label.setToolTip(self.provider_label.text())
 
     def new_session_view(self):
-        if self.capturing:
+        if self.capturing or self.file_queue.active:
             self.view_session=self.current_session
             self.render()
             return
@@ -511,7 +530,7 @@ class Window(QMainWindow):
     def open_history_menu(self,sid,button):
         if not self.history.session(sid):return
         self.history_menu_sid=sid
-        self.history_delete.setEnabled(not (self.capturing and sid==self.current_session))
+        self.history_delete.setEnabled(not ((self.capturing or self.file_queue.active) and sid==self.current_session))
         self.history_menu.popup(button.mapToGlobal(button.rect().bottomRight()))
 
     def select_session_id(self,sid):
@@ -533,8 +552,80 @@ class Window(QMainWindow):
         self.retry_button.setEnabled(True)
         self.render()
 
+    def open_files(self):
+        if self.closing:return
+        if self._in_tray:self.restore_from_tray()
+        if self.file_dialog is None:
+            from file_queue_dialog import FileQueueDialog
+            self.file_dialog=FileQueueDialog(self)
+        self.file_dialog.show();self.file_dialog.raise_();self.file_dialog.activateWindow()
+
+    def on_file_queue_changed(self):
+        if self._closed:return
+        waiting=sum(job['status']=='queued' for job in self.file_queue.jobs)
+        total=waiting+int(bool(self.file_queue.active))
+        label='音频文件 · '+(f'{total} 项任务' if total else '队列')
+        if self.files_button.text()!=label:self.files_button.setText(label)
+        self.sync_tray()
+
+    def begin_file(self,job):
+        if not self.worker or self.capturing or self.closing:
+            self.file_queue.update(job['id'],'done',{'status':'interrupted','error':'NPU 工作线程当前不可用，可稍后重试'});return
+        self.file_queue.set_available(False)
+        sid=self.history.create_session('文件 · '+job['name'],self.profile())
+        job['session']=sid;self.file_queue.save()
+        self.current_session=self.view_session=sid;self.row_limit=100;self.last_partial=''
+        self.start.setText('取消文件转录');self.start.setEnabled(True)
+        self.new_button.setText('返回文件字幕');self.refresh_source_summary()
+        self.state.setText('准备 NPU · '+job['name']);self.badge.setText('文件处理中')
+        self.worker.file_cancel.clear();self.worker.download_cancel.clear()
+        self.worker.commands.put(('file',{'id':job['id'],'path':job['path'],'options':dict(job['options'])}))
+        self.refresh_sessions();self.render();self.sync_tray()
+
+    def cancel_file(self):
+        if not self.worker or not self.file_queue.active:return
+        self.worker.file_cancel.set();self.worker.download_cancel.set()
+        self.start.setEnabled(False);self.state.setText('正在取消文件任务，等待当前 NPU 推理结束…')
+        self.sync_tray()
+
+    def on_file_event(self,event):
+        if self._closed:return
+        ident,kind,value=event['id'],event['kind'],event['value']
+        job=self.file_queue.find(ident)
+        if not job or ident!=self.file_queue.active:return
+        sid=job.get('session')
+        if kind=='committed' and sid:
+            metadata=dict(value,asr_model=job['options'].get('asr_model','parakeet'),
+                target_language=self.settings.get('target_language','简体中文'))
+            metadata.setdefault('source_language','English' if metadata['asr_model']=='parakeet' else job['options'].get('source_language','auto'))
+            self.history.add(sid,value['text'],value.get('audio_start_ms',0),value.get('audio_end_ms',1000),
+                'queued' if self.settings['translate'] else 'disabled',value.get('uncertain',False),metadata)
+            self.pump(sid);self.refresh_sessions();self.render()
+        elif kind=='metrics':
+            self.diagnostics.setText(f'NPU {value["infer_ms"]:.0f} ms · 本地文件')
+        elif kind=='progress':
+            self.file_queue.update(ident,kind,value)
+            if not self.closing and not self.worker.file_cancel.is_set():
+                self.state.setText(FILE_LABELS.get(value['stage'],'处理中')+f' · {value["percent"]:.0f}% · '+job['name'])
+                self.meter.setValue(round(value['percent']))
+                self.badge.setText('●  NPU 识别中' if value['stage']=='transcribing' else '文件处理中')
+            self.update_partial()
+        elif kind=='analysis':self.file_queue.update(ident,kind,value)
+        elif kind=='done':
+            self.history.finish(sid);self.file_queue.update(ident,kind,value)
+            self.last_partial='';self.start.setText('开始收音');self.start.setEnabled(self.ready and not self.closing)
+            self.new_button.setText('＋  新建字幕');self.meter.setValue(0);self.refresh_source_summary()
+            if not self.closing:
+                self.state.setText(FILE_LABELS.get(value['status'],'文件任务已结束')+' · '+job['name'])
+                self.state.setToolTip(value.get('error',''))
+                self.badge.setText('●  NPU 就绪' if self.worker.engine_key else '需重新加载模型')
+                self.file_queue.set_available(self.ready and not self.capturing)
+            self.refresh_sessions();self.render();self.sync_tray()
+
     def toggle(self):
         if not self.worker:return
+        if self.file_queue.active:
+            self.cancel_file();return
         if self.downloading:
             self.worker.download_cancel.set();self.autostart=False;self.start.setEnabled(False)
             self.state.setText('正在取消下载…');return
@@ -550,6 +641,7 @@ class Window(QMainWindow):
         self.current_session=self.view_session=sid
         self.row_limit=100
         self.capturing=True
+        self.file_queue.set_available(False)
         self.active_source=dict(self.settings['audio_source']);self.refresh_source_summary()
         self.last_partial=''
         self.new_button.setText('返回实时字幕')
@@ -562,6 +654,8 @@ class Window(QMainWindow):
             'feature_backend':self.settings.get('feature_backend','numpy'),'domain_bias':self.settings.get('domain_bias')}))
 
     def on_event(self,kind,value):
+        if kind=='file_event':
+            self.on_file_event(value);return
         if kind=='download':
             self.downloading=True;self.start.setText('取消下载');self.start.setEnabled(True)
             total=max(1,value['total']);percent=min(100,int(value['completed']*100/total))
@@ -572,8 +666,8 @@ class Window(QMainWindow):
             self.diagnostics.setText(f'模型 {value["completed"]/1048576:.1f} / {total/1048576:.1f} MB')
         elif kind=='download_done':
             self.downloading=False;self.meter.setValue(0)
-            self.start.setText('停止收音' if self.capturing else '开始收音')
-            self.start.setEnabled(self.ready and not self.closing)
+            self.start.setText('取消文件转录' if self.file_queue.active else ('停止收音' if self.capturing else '开始收音'))
+            self.start.setEnabled((self.ready or bool(self.file_queue.active)) and not self.closing)
             self.diagnostics.setText('音频不保存')
         elif kind=='download_cancelled':
             self.downloading=False;self.state.setText('下载已取消 · 下次可继续');self.notify(str(value))
@@ -597,6 +691,7 @@ class Window(QMainWindow):
             if self.autostart:
                 self.autostart=False
                 self.toggle()
+            self.file_queue.set_available(bool(self.worker) and not self.capturing and not self.closing)
         elif kind=='listening':
             self.state.setText('●  正在收音')
             self.state.setToolTip('')
@@ -633,6 +728,7 @@ class Window(QMainWindow):
             self.badge.setText('●  NPU 就绪' if not self.worker or self.worker.engine_key else '需重新加载模型')
             self.refresh_sessions()
             self.render()
+            self.file_queue.set_available(bool(self.worker) and self.ready and not self.closing)
         elif kind=='error':
             detail=str(value)
             summary=detail.splitlines()[0] if detail else '请检查收音与模型设置'
@@ -646,11 +742,14 @@ class Window(QMainWindow):
             self.workbench_dirty=True;return
         t=normalize_typography(self.appearance.get('typography'))
         self.partial.setFixedHeight(t['preview_height'])
-        if self.capturing and self.view_session==self.current_session:
+        if (self.capturing or self.file_queue.active) and self.view_session==self.current_session:
             text=self.last_partial or '正在聆听…'
+            if self.file_queue.active:
+                job=self.file_queue.find(self.file_queue.active)
+                text=FILE_LABELS.get(job['status'],'文件处理中')+' · '+job['name']
             source,translation=caption_visibility(self.settings)
             if not source and not (translation and self.translation_available is False):text='原文已隐藏。'
-        elif self.capturing:
+        elif self.capturing or self.file_queue.active:
             text='正在查看历史。实时收音和自动保存仍在继续。'
         else:
             text='已停止收音。' if self.view_session else '点击开始收音。'
@@ -668,14 +767,18 @@ class Window(QMainWindow):
 
     def pump(self,sid):
         if self.closing or not self.settings['translate']:return
-        queued=self.history.queued(sid)
-        if not queued:return
+        queued=self.history.queued(sid,limit=32)
+        if not queued:
+            self.translation_sessions.pop(sid,None);return
+        self.translation_sessions[sid]=None
         try:
             profile=dict(self.profile(),source_language=self.settings.get('source_language','auto'),target_language=self.settings.get('target_language','简体中文'))
             validate_profile(profile)
             key=get_key(profile)
         except Exception:
-            for row in queued:self.history.update(row['id'],'failed',error='翻译设置不完整，请在设置菜单填写服务地址、模型和密钥')
+            # Fail all outstanding rows once, rather than leaving a long file stuck.
+            self.history.fail_queued(sid,'翻译设置不完整，请在设置菜单填写服务地址、模型和密钥')
+            self.translation_sessions.pop(sid,None)
             self.set_translation_status(False,'翻译设置不完整，请检查服务地址、模型和密钥')
             return
         for row in queued:
@@ -685,6 +788,13 @@ class Window(QMainWindow):
             self.active_jobs.add(row['id'])
             self.history.update(row['id'],'pending')
             self.history.translation_source(row['id'],profile)
+
+    def pump_waiting(self):
+        # File ASR can finish many sessions faster than the network translator.
+        # Keep all of them reachable after current_session advances to another file.
+        for sid in list(self.translation_sessions):
+            self.pump(sid)
+            if self.translator.jobs.full():break
 
     def on_translation(self,sid,ident,text,success):
         if sid.startswith('test:'):
@@ -696,11 +806,13 @@ class Window(QMainWindow):
             # A deleted session must not strand other work behind a formerly full queue.
             for active_sid in {self.current_session,self.view_session}:
                 if active_sid:self.pump(active_sid)
+            self.pump_waiting()
             return
         self.history.update(ident,'done' if success else 'failed',text if success else '', '' if success else text)
         self.set_translation_status(success,'' if success else text)
         self.pump(sid)
         if self.current_session and self.current_session!=sid:self.pump(self.current_session)
+        self.pump_waiting()
         self.refresh_desktop()
         if sid==self.view_session:self.render()
 
@@ -780,13 +892,14 @@ class Window(QMainWindow):
     def delete_session(self,sid):
         row=self.history.session(sid) if sid else None
         if not row:return
-        if self.capturing and sid==self.current_session:
-            self.notify('请先停止收音，再删除当前会话');return
+        if (self.capturing or self.file_queue.active) and sid==self.current_session:
+            self.notify('请先停止收音或取消文件任务，再删除当前会话');return
         answer=QMessageBox.question(self,'删除历史记录','删除“'+row['title']+'”及其全部字幕？此操作无法撤销。',
             QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.Cancel,QMessageBox.StandardButton.Cancel)
         if answer!=QMessageBox.StandardButton.Yes:return
         for _,ident,*_ in self.translator.cancel_queued(session=sid):self.active_jobs.discard(ident)
         self.history.delete_session(sid)
+        self.translation_sessions.pop(sid,None)
         if self.current_session==sid:self.current_session=None
         if self.view_session==sid:
             self.view_session=self.current_session if self.capturing else None
@@ -881,10 +994,13 @@ class Window(QMainWindow):
         if running:
             if not self.closing:
                 self.closing=True
+                self.file_queue.pause(True);self.file_queue.set_available(False)
+                if self.file_dialog:self.file_dialog.hide()
                 if self.worker:
                     self.worker.quit_requested.set()
                     self.worker.download_cancel.set()
                     self.worker.stop_capture.set()
+                    self.worker.file_cancel.set()
                     self.worker.commands.put(None)
                 self.translator.stop()
                 self.sync_tray()

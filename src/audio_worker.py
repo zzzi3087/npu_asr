@@ -34,6 +34,8 @@ class AudioWorker(QThread):
         self.live_gain=normalize_agc(self.options.get('agc'))
         self.engine_key=None
         self.download_cancel=threading.Event()
+        self.file_cancel=threading.Event()
+        self.file_task_active=False
 
     def update_gain(self,value):
         self.live_gain=normalize_agc(value)
@@ -67,6 +69,7 @@ class AudioWorker(QThread):
             self.engine_key=None
             self.download_cancel.clear()
             if self.quit_requested.is_set():raise DownloadCancelled('正在退出')
+            if self.file_task_active and self.file_cancel.is_set():raise DownloadCancelled('文件任务已取消')
             if any(needs_download(ident) for ident in (model_id,'silero-vad')):
                 import openvino as ov
                 if 'NPU' not in ov.Core().available_devices:
@@ -141,6 +144,22 @@ class AudioWorker(QThread):
                         self.emit('error', str(error))
                     finally:
                         self.emit('stopped', None)
+                elif command == 'file':
+                    from file_transcription import transcribe_file
+                    from media_processing import FileCancelled,check_cancel
+                    def event(kind,value):self.event.emit('file_event',{'id':args['id'],'kind':kind,'value':value})
+                    status='completed';error=''
+                    self.file_task_active=True
+                    try:
+                        check_cancel(self.file_cancel)
+                        self.load_engine(args['options'])
+                        check_cancel(self.file_cancel)
+                        transcribe_file(self.engine,args,self.file_cancel,event)
+                    except (FileCancelled,DownloadCancelled) as exc:status='cancelled';error=str(exc)
+                    except Exception as exc:status='failed';error=str(exc)
+                    finally:
+                        self.file_task_active=False
+                        event('done',{'status':status,'error':error})
         except Exception as error:
             self.emit('error', str(error))
         finally:

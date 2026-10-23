@@ -35,6 +35,25 @@ def main():
         w.on_event('download',{'model':'fixture','file':'fixture','completed':50,'total':100,'stage':'download'})
         assert w.start.text()=='取消下载';w.on_event('download_done',{})
         result['gui_created']=True
+        w.open_files();qt.processEvents()
+        assert w.file_dialog.tree.columnCount()==4 and w.file_dialog.normalize.text()=='自动调整响度'
+        w.file_dialog.hide();result['file_queue_gui_created']=True
+        import tempfile,threading,subprocess
+        import numpy as np,soundfile as sf
+        from media_processing import media_tools,probe,analyze,prepare,process_options
+        ffmpeg,ffprobe=media_tools()
+        result['bundled_ffmpeg']=str(Path(ffmpeg).resolve()).startswith(str(RESOURCE_DIR.resolve()))
+        assert result['bundled_ffmpeg']
+        version=subprocess.check_output([ffmpeg,'-version'],**process_options()).decode('utf-8','replace').splitlines()[0]
+        result['ffmpeg_version']=version
+        with tempfile.TemporaryDirectory(prefix='captions-smoke-media-') as temporary:
+            source=Path(temporary)/'fixture.wav'
+            sf.write(source,.005*np.sin(np.arange(96000)*2*np.pi*440/48000),48000)
+            cancel=threading.Event();stats=analyze(source,probe(source,cancel),{'normalize':True},cancel,lambda *_:None)
+            prepared=prepare(source,Path(temporary),stats,cancel,lambda *_:None)
+            info=sf.info(prepared)
+            assert stats['gain_db']>0 and info.samplerate==16000 and info.channels==1
+        result['bundled_audio_preprocessing']=True
         import sounddevice as sd,pyaudiowpatch,openvino as ov
         result['audio_backends_loaded']=bool(sd.query_hostapis()) and hasattr(pyaudiowpatch,'PyAudio')
         core=ov.Core();result['devices']=core.available_devices
@@ -53,12 +72,13 @@ def main():
             import numpy as np
             result['vad_loaded']=isinstance(Vad()(np.zeros(512,np.float32)),float)
             if args.wav:
-                import soundfile as sf,soxr
-                audio,rate=sf.read(args.wav,dtype='float32')
-                if audio.ndim>1:audio=audio.mean(axis=1)
-                audio=soxr.resample(audio,rate,16000)
-                decoded=worker.engine.infer(audio)
-                result['recognized_characters']=len(decoded['text']);assert result['recognized_characters']>0
+                from file_transcription import transcribe_file
+                events=[]
+                transcribe_file(worker.engine,{'path':str(args.wav),'options':dict(options,normalize=True)},
+                    threading.Event(),lambda kind,value:events.append((kind,value)))
+                result['recognized_characters']=sum(len(value['text']) for kind,value in events if kind=='committed')
+                assert result['recognized_characters']>0
+                result['file_transcription_complete']=events[-1][1]['percent']==100
         w.close();loop=QEventLoop();QTimer.singleShot(400,loop.quit);loop.exec()
         assert not w.translator.isRunning();result['ok']=True
     except BaseException as error:

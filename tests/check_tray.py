@@ -29,6 +29,7 @@ class FakeIcon(QObject):
 class CaptureWorker:
     def __init__(self):
         self.stop_capture=threading.Event();self.quit_requested=threading.Event();self.download_cancel=threading.Event()
+        self.file_cancel=threading.Event()
         self.commands=queue.Queue();self.engine_key='fixture'
     def isRunning(self):return False
     def update_gain(self,value):pass

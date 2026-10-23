@@ -10,6 +10,7 @@ cache*/
 .env*
 settings.json
 health.json
+file-queue.json
 build/
 dist/
 releases/
