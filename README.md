@@ -127,6 +127,9 @@ python tests/check_ui_stability.py
 多语言支持
 省电优化
 界面优化
+本地文件转录单独选择模型
+
+
 
 ## 许可与致谢
 
