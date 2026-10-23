@@ -4,6 +4,26 @@ from pathlib import Path
 import uuid
 from PySide6.QtCore import QObject,Signal,QTimer
 from app_paths import DATA
+from languages import LANGUAGES
+
+FILE_MODELS=(('Parakeet v2 · 英语 · NPU','parakeet'),
+    ('Qwen3-ASR 1.7B · 多语言 · NPU','qwen3-asr-1.7b'),
+    ('Mega-ASR · 抗噪 · NPU','mega-asr'))
+
+
+def file_asr_options(value=None,strict=False):
+    value=value if isinstance(value,dict) else {}
+    model=value.get('asr_model','parakeet');language=value.get('source_language','auto')
+    if model not in {ident for _,ident in FILE_MODELS}:
+        if strict:raise ValueError('请选择支持的本地文件转录模型')
+        model='parakeet'
+    if language not in {ident for ident,_,_ in LANGUAGES}:
+        if strict:raise ValueError('请选择支持的本地文件转录语言')
+        language='auto'
+    if model=='parakeet' and language not in ('auto','English'):
+        if strict:raise ValueError('本地文件选择 Parakeet 时仅支持英语，请改用 Qwen3-ASR 或 Mega-ASR')
+        language='auto'
+    return {'asr_model':model,'source_language':language}
 
 ACTIVE={'loading','analyzing','preparing','transcribing'}
 FINISHED={'completed','failed','cancelled','interrupted'}
@@ -21,9 +41,11 @@ class FileQueue(QObject):
         self.path=Path(path) if path else DATA/'file-queue.json'
         self.jobs=[];self.active=None;self.available=False;self.paused=False
         self.preprocessing={'normalize':True,'highpass':False}
+        self.asr_options=file_asr_options()
         if self.path.exists():
             try:
                 data=json.loads(self.path.read_text('utf-8'))
+                self.asr_options=file_asr_options(data.get('asr_options'))
                 for raw in data.get('jobs',[])[:1000]:
                     if not isinstance(raw,dict) or not raw.get('id') or not raw.get('path'):continue
                     if raw.get('status') in ACTIVE:raw['status']='interrupted';raw['error']='上次退出时未完成，可重试；已生成的字幕保留在历史中'
@@ -38,9 +60,14 @@ class FileQueue(QObject):
         try:
             self.path.parent.mkdir(parents=True,exist_ok=True)
             temp=self.path.with_suffix('.tmp')
-            temp.write_text(json.dumps({'version':1,'preprocessing':self.preprocessing,'jobs':self.jobs},ensure_ascii=False,allow_nan=False),encoding='utf-8')
+            temp.write_text(json.dumps({'version':2,'asr_options':self.asr_options,'preprocessing':self.preprocessing,'jobs':self.jobs},ensure_ascii=False,allow_nan=False),encoding='utf-8')
             temp.replace(self.path)
         except OSError:self.error.emit('文件队列未能保存，请检查本机磁盘空间；本次运行仍可继续处理')
+
+    def set_asr_options(self,model,language):
+        options=file_asr_options({'asr_model':model,'source_language':language},strict=True)
+        if options!=self.asr_options:
+            self.asr_options=options;self.save();self.changed.emit()
 
     def add(self,paths,options):
         known={job['path'] for job in self.jobs if job['status'] in ACTIVE|{'queued'}}
@@ -52,8 +79,9 @@ class FileQueue(QObject):
             if len(self.jobs)>=1000:
                 self.error.emit('队列最多保留 1000 项，其余文件未添加；请先清除已结束项');break
             # Explicit allowlist: profiles/API keys never enter this manifest.
-            names=('asr_model','source_language','feature_backend','domain_bias','quiet','agc','segmentation')
+            names=('feature_backend','domain_bias','quiet','agc','segmentation')
             snapshot=json.loads(json.dumps({k:options[k] for k in names if k in options}))
+            snapshot.update(file_asr_options(self.asr_options,strict=True))
             snapshot.update(self.preprocessing)
             self.jobs.append({'id':uuid.uuid4().hex,'path':str(path),'name':path.name,'options':snapshot,
                 'status':'queued','percent':0,'stage_percent':0,'session':None,'error':'','analysis':None})

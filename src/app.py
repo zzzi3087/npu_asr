@@ -783,11 +783,12 @@ class Window(QMainWindow):
             return
         for row in queued:
             if row['id'] in self.active_jobs:continue
-            try:self.translator.enqueue(sid,row['id'],row['en'],self.history.context(row['id']),profile,key)
+            row_profile=dict(profile,source_language=row.get('source_language') or 'auto')
+            try:self.translator.enqueue(sid,row['id'],row['en'],self.history.context(row['id']),row_profile,key)
             except queue.Full:break
             self.active_jobs.add(row['id'])
             self.history.update(row['id'],'pending')
-            self.history.translation_source(row['id'],profile)
+            self.history.translation_source(row['id'],row_profile)
 
     def pump_waiting(self):
         # File ASR can finish many sessions faster than the network translator.

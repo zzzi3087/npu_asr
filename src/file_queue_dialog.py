@@ -1,8 +1,9 @@
 """Nonmodal local file queue, with per-stage progress and audio measurements."""
 from PySide6.QtCore import Qt,Signal
 from PySide6.QtWidgets import (QDialog,QVBoxLayout,QHBoxLayout,QLabel,QPushButton,QTreeWidget,
-    QTreeWidgetItem,QProgressBar,QCheckBox,QFileDialog,QHeaderView)
-from file_queue import LABELS,FINISHED
+    QTreeWidgetItem,QProgressBar,QCheckBox,QFileDialog,QHeaderView,QComboBox)
+from file_queue import LABELS,FINISHED,FILE_MODELS
+from languages import LANGUAGES
 
 
 class FileTree(QTreeWidget):
@@ -27,6 +28,18 @@ class FileQueueDialog(QDialog):
         heading=QLabel('本地音频转录');heading.setObjectName('heading');layout.addWidget(heading)
         hint=QLabel('添加或拖入多个文件，依次检查响度、预处理和 NPU 转录。每个文件单独保存到历史；翻译在后台继续。')
         hint.setWordWrap(True);hint.setObjectName('muted');layout.addWidget(hint)
+        asr=QHBoxLayout();asr.addWidget(QLabel('文件转录模型'))
+        self.model_combo=QComboBox();self.model_combo.setAccessibleName('本地文件转录模型')
+        for name,ident in FILE_MODELS:self.model_combo.addItem(name,ident)
+        asr.addWidget(self.model_combo,2);asr.addWidget(QLabel('文件语言'))
+        self.language_combo=QComboBox();self.language_combo.setAccessibleName('本地文件转录语言')
+        for ident,name,_ in LANGUAGES:self.language_combo.addItem(name,ident)
+        asr.addWidget(self.language_combo,1);layout.addLayout(asr)
+        self.sync_asr_options()
+        self.model_combo.currentIndexChanged.connect(self.change_asr_options)
+        self.language_combo.currentIndexChanged.connect(self.change_asr_options)
+        self.model_combo.setToolTip('只影响之后添加的文件，已有队列任务保持原模型；不改变实时字幕模型。')
+        self.language_combo.setToolTip('文件转录语言独立保存；Parakeet 仅支持英语，其他语言请选择 Qwen/Mega。')
         self.options_label=QLabel();self.options_label.setWordWrap(True);layout.addWidget(self.options_label)
         options=QHBoxLayout()
         self.normalize=QCheckBox('自动调整响度');self.normalize.setChecked(self.queue.preprocessing['normalize'])
@@ -70,6 +83,21 @@ class FileQueueDialog(QDialog):
     def save_preprocessing(self):
         self.queue.preprocessing.update(normalize=self.normalize.isChecked(),highpass=self.highpass.isChecked());self.queue.save()
 
+    def sync_asr_options(self):
+        key=(self.queue.asr_options['asr_model'],self.queue.asr_options['source_language'])
+        if getattr(self,'_asr_key',None)==key and (self.model_combo.currentData(),self.language_combo.currentData())==key:return
+        for control,key in ((self.model_combo,'asr_model'),(self.language_combo,'source_language')):
+            control.blockSignals(True);control.setCurrentIndex(control.findData(self.queue.asr_options[key]));control.blockSignals(False)
+        parakeet=self.queue.asr_options['asr_model']=='parakeet'
+        for index in range(self.language_combo.count()):
+            self.language_combo.model().item(index).setEnabled(not parakeet or self.language_combo.itemData(index) in ('auto','English'))
+        self._asr_key=key
+
+    def change_asr_options(self):
+        model=self.model_combo.currentData();language=self.language_combo.currentData()
+        if model=='parakeet' and language not in ('auto','English'):language='auto'
+        self.queue.set_asr_options(model,language);self.sync_asr_options()
+
     def choose_files(self):
         paths,_=QFileDialog.getOpenFileNames(self,'选择本地音频文件','',
             '音频文件 (*.wav *.wave *.mp3 *.m4a *.aac *.flac *.ogg *.opus *.wma *.aiff *.aif *.amr *.mka *.webm);;含音轨的视频 (*.mp4 *.mkv *.mov *.avi);;所有文件 (*)')
@@ -85,6 +113,7 @@ class FileQueueDialog(QDialog):
         item=self.tree.currentItem();return item.data(0,Qt.ItemDataRole.UserRole) if item else None
 
     def refresh(self):
+        self.sync_asr_options()
         selected=self.selected();ids=[job['id'] for job in self.queue.jobs]
         if list(self.items)!=ids:
             self.tree.blockSignals(True);self.tree.clear();self.items={}
@@ -103,7 +132,7 @@ class FileQueueDialog(QDialog):
         suffix='已暂停，将在当前任务结束后等待' if self.queue.paused else ('等待停止收音或 NPU 就绪' if pending and not self.queue.available else '按顺序处理')
         self.summary.setText(f'共 {len(self.queue.jobs)} 项 · 完成 {done} · 等待 {pending} · {suffix}')
         settings=self.window.settings
-        self.options_label.setText(f'新任务：{settings["asr_model"]} · {settings["source_language"]} → {settings["target_language"]}；模型、语言与词表在添加时固定，翻译使用当前设置。')
+        self.options_label.setText(f'文件模型和语言独立保存，只影响新添加的文件；队列中的模型、语言和词表保持不变。译文目标：{settings["target_language"]}，翻译与增益使用设置中的选项。')
         self.pause_button.setText('继续队列' if self.queue.paused else '暂停队列')
         self.cancel_button.setEnabled(bool(self.queue.active) and not self.window.closing)
         self.selection_changed()

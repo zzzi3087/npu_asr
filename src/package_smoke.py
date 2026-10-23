@@ -37,6 +37,10 @@ def main():
         result['gui_created']=True
         w.open_files();qt.processEvents()
         assert w.file_dialog.tree.columnCount()==4 and w.file_dialog.normalize.text()=='自动调整响度'
+        live_model=w.settings['asr_model']
+        w.file_dialog.model_combo.setCurrentIndex(w.file_dialog.model_combo.findData('qwen3-asr-1.7b'))
+        assert w.settings['asr_model']==live_model and w.file_queue.asr_options['asr_model']=='qwen3-asr-1.7b'
+        result['file_model_independent']=True
         w.file_dialog.hide();result['file_queue_gui_created']=True
         import tempfile,threading,subprocess
         import numpy as np,soundfile as sf
