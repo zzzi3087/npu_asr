@@ -6,7 +6,7 @@ Windows 桌面实时转录与翻译软件。支持麦克风和桌面音频、双
 
 ## 安装与使用
 
-1. 在 [Releases](https://github.com/zzzi3087/npu_asr/releases/latest) 下载 `LiveCaptions-0.1.1-win64-setup.exe` 并安装。更新前先退出已打开的软件。也可下载 portable ZIP，完整解压后运行 `LiveCaptions.exe`。
+1. 在 [Releases](https://github.com/zzzi3087/npu_asr/releases/latest) 下载 `LiveCaptions-0.1.2-win64-setup.exe` 并安装。更新前先退出已打开的软件。也可下载 portable ZIP，完整解压后运行 `LiveCaptions.exe`。
 2. 需要 Windows 11 x64、兼容 OpenVINO 的 **Intel NPU** 和已安装的 Intel NPU 驱动。软件自带运行库，不需要另装 Python。不同型号、驱动的编译兼容性可能不同；没有 NPU 时不会改用 CPU/GPU 转录。
 3. 首次启动检查模型；缺少的文件自动下载，并显示进度。可取消并在下次续传。下载后校验 SHA-256，完整模型会复用；首次 NPU 编译也需要等待。
 4. 在设置中选择模型、源语言、翻译语言和收音设备。顶部的音频来源可快速切换麦克风/桌面音频，点击“开始收音”开始。
@@ -31,6 +31,7 @@ Parakeet 首次下载约 1.2 GB，Qwen/Mega 各约 3 GB；相同文件尽量复�
 
 ## 功能
 
+- 设置窗口右上角显示当前程序版本，切换设置页面时始终可见，可选择复制。
 - 多语言转录和翻译；Parakeet v2 仅支持英语，多语言使用 Qwen/Mega。
 - 动态音量增益、静音门限与分句策略；低音量提升不能恢复录音中已经缺失的信息。
 - 领域词表：内置物理学、高能/理论物理、天体物理及暗物质术语，可编辑其他领域。Parakeet 使用 TDT 解码词组偏置；Qwen/Mega 使用上下文词表。增强效果取决于录音，词表过强也可能增加误报。
@@ -84,7 +85,6 @@ python tools/check_ui_stability.py
 
 ## 更新预告:
 下个版本将会加入:
-版本号
 多语言支持
 转录本地音频文件
 省电优化

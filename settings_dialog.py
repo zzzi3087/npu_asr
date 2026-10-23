@@ -16,6 +16,7 @@ from domain_editor import DomainEditor
 from desktop_caption_editor import DesktopCaptionEditor
 from settings_pages import SettingsPages,Foldout
 from audio_source_editor import AudioSourceEditor
+from app_paths import VERSION
 
 
 class SettingsSave(QThread):
@@ -65,7 +66,13 @@ class SettingsDialog(QDialog):
         root.setContentsMargins(24,20,24,20)
         heading = QLabel('工作台设置')
         heading.setObjectName('dialogHeading')
-        root.addWidget(heading)
+        heading_row=QHBoxLayout();heading_row.addWidget(heading,1)
+        self.app_version_label=QLabel('当前版本：'+VERSION)
+        self.app_version_label.setObjectName('muted')
+        self.app_version_label.setAccessibleName('当前程序版本')
+        self.app_version_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        heading_row.addWidget(self.app_version_label)
+        root.addLayout(heading_row)
         tabs = SettingsPages()
         self.tabs=tabs
         root.addWidget(tabs,1)
