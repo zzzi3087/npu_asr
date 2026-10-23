@@ -11,7 +11,11 @@ def main():
     def scan(data,name):
         lower=data.lower()
         if any(needle in lower for needle in needles):findings.append({'file':name,'reason':'local_home_path'})
-        if re.search(rb'(?<![A-Za-z0-9])(?:sk-(?:proj-|ant-)?[A-Za-z0-9_-]{24,}|gh[pousr]_[A-Za-z0-9]{24,}|github_pat_[A-Za-z0-9_]{24,})',data):
+        for match in re.finditer(rb'(?<![A-Za-z0-9])(?:sk-(?:proj-|ant-)?[A-Za-z0-9_-]{24,}|gh[pousr]_[A-Za-z0-9]{24,}|github_pat_[A-Za-z0-9_]{24,})',data):
+            # Public OpenSSH algorithm identifier in FFmpeg's untouched libssh;
+            # exempt exactly that identifier, never an entire file or prefix.
+            identifier=b'sk-'+b'ecdsa-sha2-nistp256-cert-v01@openssh.com'
+            if data[match.start():match.end()+12]==identifier:continue
             findings.append({'file':name,'reason':'credential_shaped_literal'})
     def code(value,name):
         nonlocal code_count

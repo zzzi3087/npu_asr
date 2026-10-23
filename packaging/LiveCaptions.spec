@@ -24,6 +24,10 @@ pyz=PYZ(a.pure)
 # Qt 6 uses Windows 11's native ICU ABI. Never bundle a same-named ICU from
 # unrelated tools on the build machine's PATH (e.g. Poppler/Conda).
 a.binaries=[entry for entry in a.binaries if not Path(entry[0]).name.lower().startswith(('icuuc','icudt','icuin'))]
+# FFmpeg runs in its own directory and loads its adjacent shared libraries.
+# Analysis also copies those dependencies to the bundle root; retain one copy.
+media_dlls={path.name.lower() for path in (media/'bin').glob('*.dll')}
+a.binaries=[entry for entry in a.binaries if not (len(Path(entry[0]).parts)==1 and Path(entry[0]).name.lower() in media_dlls)]
 exe=EXE(pyz,a.scripts,[],exclude_binaries=True,name='LiveCaptions',debug=False,bootloader_ignore_signals=False,
     strip=False,upx=False,console=False,disable_windowed_traceback=False,
     icon=str(root/'resources'/'assets'/'app.ico'),version=str(root/'packaging'/'version-info.txt'))
