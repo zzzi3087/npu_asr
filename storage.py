@@ -13,6 +13,7 @@ from audio_gain import DEFAULT_AGC,normalize_agc
 from domain_bias import default_domain_bias,normalize_domain_bias
 from desktop_caption_config import default_desktop_captions,normalize_desktop_captions
 from audio_sources import normalize_audio_source
+from caption_visibility import caption_visibility
 
 from app_paths import DATA
 SERVICE = 'ParakeetNPUSubtitles'
@@ -24,6 +25,7 @@ def utc_now():
 
 def default_settings():
     return {'version': 3, 'main_layout_version':2, 'selected_profile': 'deepseek', 'translate': True,
+        'show_source':True,'show_translation':True,
         'asr_model':'parakeet','source_language':'auto','target_language':'简体中文','agc':dict(DEFAULT_AGC),'feature_backend':'numpy','domain_bias':default_domain_bias(),'desktop_captions':default_desktop_captions(),
         'english_size': 24, 'chinese_size': 22, 'opacity': 100, 'topmost': False,
         'quiet': True, 'interval': 1.5, 'segmentation': 'balanced', 'colors':dict(DEFAULT_COLORS),
@@ -57,6 +59,7 @@ def load_settings(directory=DATA):
     defaults['domain_bias']=normalize_domain_bias(defaults.get('domain_bias'))
     defaults['desktop_captions']=normalize_desktop_captions(defaults.get('desktop_captions'))
     defaults['audio_source']=normalize_audio_source(saved.get('audio_source'),legacy=defaults.get('microphone_name',''))
+    defaults['show_source'],defaults['show_translation']=caption_visibility(defaults)
     return defaults
 
 

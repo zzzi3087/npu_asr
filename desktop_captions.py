@@ -6,6 +6,7 @@ from PySide6.QtGui import (QGuiApplication,QPainter,QPainterPath,QPen,QColor,QIm
     QTextLayout,QTextOption,QTransform)
 from PySide6.QtWidgets import QWidget,QMenu
 from desktop_caption_config import normalize_desktop_captions
+from caption_visibility import visible_caption_pair
 
 SAMPLE_PAIRS=(('The universe still holds many mysteries.','宇宙仍有许多未解之谜。'),
               ('We search for dark matter and axions.','我们寻找暗物质与轴子。'))
@@ -21,13 +22,14 @@ class DesktopCaptions(QWidget):
         flags=Qt.WindowType.Tool|Qt.WindowType.FramelessWindowHint|Qt.WindowType.WindowDoesNotAcceptFocus
         super().__init__(None,flags)
         self.setObjectName('desktopCaptionOverlay')
-        self.setWindowTitle('实时字幕 · 桌面字幕')
+        self.setWindowTitle('桌面字幕')
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self.setAutoFillBackground(False);self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.setStyleSheet('QWidget#desktopCaptionOverlay { background: transparent; border: none; }')
         self.options={};self.pairs=();self.preview=False;self._pending=False;self._building=False;self._shutdown=False
         self.partial='';self.live_active=False
+        self.show_source=self.show_translation=True
         self._key=None;self._image=QImage();self._glyphs=OrderedDict();self._drag=None
         self.rebuild_count=0;self.paint_count=0
         self._watched_screens=set()
@@ -51,6 +53,11 @@ class DesktopCaptions(QWidget):
         pairs=tuple((str(en).strip()[:8192],str(zh).strip()[:8192]) for en,zh in pairs if str(en).strip() or str(zh).strip())
         if pairs==self.pairs:return
         self.pairs=pairs;self.request_refresh()
+
+    def set_visibility(self,show_source,show_translation):
+        flags=bool(show_source),bool(show_translation)
+        if flags==(self.show_source,self.show_translation):return
+        self.show_source,self.show_translation=flags;self.request_refresh()
 
     def set_partial(self,text,active=True):
         text=str(text).strip()[:8192];active=bool(active)
@@ -131,7 +138,10 @@ class DesktopCaptions(QWidget):
         pairs=self.pairs[-self.options['sentence_count']:]
         sample=self.preview or (not self.options['locked'] and not self.live_active)
         if not pairs and sample:pairs=SAMPLE_PAIRS[-self.options['sentence_count']:]
-        live=('实时预览 · '+(self.partial or '正在聆听…')) if self.live_active else ('实时预览 · This sentence is still being recognized.' if sample else '')
+        pairs=tuple(pair for source,translation in pairs
+            if any(pair:=visible_caption_pair(source,translation,self.show_source,self.show_translation)))
+        live=self.partial if self.live_active else ('This sentence is still being recognized.' if sample else '')
+        if not self.show_source:live=''
         if not self.options['preview_enabled']:live=''
         if not pairs and not live:self.hide();return
         screen=self._screen();area=screen.availableGeometry()
@@ -145,10 +155,13 @@ class DesktopCaptions(QWidget):
                 padding=12+self.options['outline_width'];y=padding;blocks=[]
                 for n,(source,translation) in enumerate(pairs):
                     if n:y+=self.options['sentence_gap']
+                    previous=False
                     for kind,text in [('source',source),('translation',translation)]:
-                        if kind=='translation':y+=self.options['bilingual_gap']
+                        if not text:continue
+                        if previous:y+=self.options['bilingual_gap']
                         path,height=self._text_path(text,self._font(kind),width-2*padding)
                         blocks.append((path,QColor(self.options[kind+'_color']),y));y+=height
+                        previous=True
                 if live:
                     if pairs:y+=self.options['preview_gap']
                     path,height=self._text_path(live,self._font('preview'),width-2*padding,max_lines=1)

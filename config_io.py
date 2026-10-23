@@ -45,7 +45,7 @@ def validate_configuration(value):
         if type(number) not in (int,float) or not math.isfinite(number) or not lo<=number<=hi:
             raise ValueError('数值超出范围：'+key)
         if key!='interval':result[key]=int(number)
-    for key in ('translate','topmost','quiet'):
+    for key in ('translate','topmost','quiet','show_source','show_translation'):
         if type(result[key]) is not bool:raise ValueError('布尔参数无效：'+key)
     if result['interval'] not in (1.,1.5,2.):raise ValueError('预览间隔须为 1、1.5 或 2 秒')
     if result['segmentation'] not in ('balanced','sentence','fast'):raise ValueError('不支持的分句策略')

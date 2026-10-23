@@ -11,7 +11,7 @@ from PySide6.QtCore import Qt,QTimer,QDateTime,QTimeZone,QLockFile,QEvent,QSize
 from PySide6.QtGui import QFont,QKeySequence,QShortcut,QTextCursor,QTextBlockFormat,QTextCharFormat,QColor
 from PySide6.QtWidgets import (QApplication,QMainWindow,QWidget,QFrame,QLabel,QPushButton,QToolButton,
     QVBoxLayout,QHBoxLayout,QComboBox,QLineEdit,QListWidget,QListWidgetItem,QTextBrowser,
-    QProgressBar,QSplitter,QMenu,QFileDialog,QMessageBox,QInputDialog,QSizePolicy)
+    QProgressBar,QSplitter,QMenu,QFileDialog,QMessageBox,QInputDialog,QSizePolicy,QCheckBox)
 from storage import DATA,History,load_settings,save_settings,export_session,cue_time
 from translation import Translator,get_key,validate_profile
 from audio_worker import AudioWorker
@@ -23,6 +23,7 @@ from audio_sources import source_label
 from history_row import HistoryRow
 from workspace_header import WorkspaceHeader
 from app_paths import RESOURCE_DIR
+from caption_visibility import caption_visibility
 from PySide6.QtGui import QIcon
 
 from theme import STYLE,apply_theme,normalize_colors
@@ -49,6 +50,7 @@ class Window(QMainWindow):
         self.capturing=self.closing=self.ready=False
         self.active_source=None
         self.downloading=False
+        self.translation_available=None;self.translation_error=''
         self.autostart=autostart
         self.active_jobs=set()
         self.history_rows={}
@@ -207,7 +209,14 @@ class Window(QMainWindow):
         self.more_rows.setObjectName('quietButton')
         self.more_rows.clicked.connect(self.load_more_rows)
         self.more_rows.hide()
-        main.addWidget(self.more_rows)
+        self.caption_controls=QWidget();self.caption_controls.setObjectName('captionVisibility')
+        display_row=QHBoxLayout(self.caption_controls);display_row.setContentsMargins(0,0,0,0);display_row.setSpacing(14)
+        display_row.addWidget(self.more_rows);display_row.addStretch(1)
+        self.hide_source=QCheckBox('不显示原文');self.hide_translation=QCheckBox('不显示译文')
+        for control in (self.hide_source,self.hide_translation):
+            control.setToolTip('同时控制主页历史字幕和桌面字幕；缺少译文时自动保留原文。')
+            control.toggled.connect(self.change_caption_visibility);display_row.addWidget(control)
+        self.sync_caption_visibility();main.addWidget(self.caption_controls)
         self.browser=QTextBrowser()
         self.browser.setOpenExternalLinks(False)
         main.addWidget(self.browser,1)
@@ -244,6 +253,10 @@ class Window(QMainWindow):
         self.diagnostics=QLabel('音频不保存')
         self.diagnostics.setObjectName('muted')
         footer.addWidget(self.diagnostics)
+        self.translation_warning=QLabel('翻译 API 不可用')
+        self.translation_warning.setObjectName('translationWarning')
+        self.translation_warning.setAlignment(Qt.AlignmentFlag.AlignRight|Qt.AlignmentFlag.AlignVCenter)
+        self.translation_warning.hide();footer.addWidget(self.translation_warning)
         bottom_layout.addWidget(self.footer)
         main.addWidget(bottom)
         split.addWidget(content)
@@ -269,6 +282,7 @@ class Window(QMainWindow):
 
     def apply_display(self):
         self.appearance={key:self.settings[key] for key in ('typography','english_size','chinese_size')}
+        self.sync_caption_visibility()
         self.refresh_source_summary()
         self.desktop.configure(self.settings.get('desktop_captions'))
         self.sync_desktop_controls()
@@ -278,6 +292,35 @@ class Window(QMainWindow):
         self.setWindowOpacity(self.settings['opacity']/100)
         if visible:self.show()
         self.render()
+
+    def sync_caption_visibility(self):
+        for control,visible in zip((self.hide_source,self.hide_translation),caption_visibility(self.settings)):
+            control.blockSignals(True);control.setChecked(not visible);control.blockSignals(False)
+
+    def change_caption_visibility(self,*_):
+        old=caption_visibility(self.settings)
+        self.settings.update(show_source=not self.hide_source.isChecked(),show_translation=not self.hide_translation.isChecked())
+        try:save_settings(self.settings)
+        except OSError:
+            self.settings.update(zip(('show_source','show_translation'),old));self.sync_caption_visibility()
+            self.notify('字幕显示选项未能保存，请检查本机存储空间');return
+        # A settings dialog can remain open while the global controls change.
+        if self.dialog:
+            self.dialog.settings.update(show_source=self.settings['show_source'],show_translation=self.settings['show_translation'])
+        self.render_now(force=True)
+
+    def set_translation_status(self,available,detail=''):
+        self.translation_available=available
+        self.translation_error='' if available is not False else str(detail or '请检查翻译服务地址、模型、密钥或网络')
+        self.refresh_translation_warning()
+
+    def refresh_translation_warning(self,rows=None):
+        detail=self.translation_error
+        if self.translation_available is None and rows and rows[-1]['status']=='failed':
+            detail=rows[-1].get('error') or '上次翻译未完成，可在左下角重试或补译'
+        visible=bool(self.settings['translate'] and detail)
+        self.translation_warning.setVisible(visible)
+        self.translation_warning.setToolTip((detail+'；点击左下角重试或补译。') if visible else '')
 
     def sync_desktop_controls(self):
         options=self.desktop.options
@@ -340,7 +383,9 @@ class Window(QMainWindow):
         self.refresh_desktop()
 
     def refresh_desktop(self):
-        if self.closing or not self.desktop.options['enabled']:return
+        if self.closing:return
+        self.desktop.set_visibility(*caption_visibility(self.settings))
+        if not self.desktop.options['enabled']:return
         sid=self.current_session if self.capturing else self.view_session
         rows=self.history.rows(sid,self.desktop.options['sentence_count']) if sid else []
         self.desktop.set_pairs([(row['en'],row['zh']) for row in rows])
@@ -361,6 +406,7 @@ class Window(QMainWindow):
         self.actions_layout.setSpacing(max(4,min(8,t['layout_gap']//2)))
         self.preview_layout.setSpacing(4)
         self.notice.setStyleSheet(f'color:{self.colors["success"]};padding:0;')
+        self.translation_warning.setStyleSheet(f'color:{self.colors["warning"]};padding:0;')
         self.render_now(force=True)
 
     def preview_typography(self,appearance):
@@ -560,6 +606,8 @@ class Window(QMainWindow):
         self.partial.setFixedHeight(t['preview_height'])
         if self.capturing and self.view_session==self.current_session:
             text=self.last_partial or '正在聆听…'
+            source,translation=caption_visibility(self.settings)
+            if not source and not (translation and self.translation_available is False):text='原文已隐藏。'
         elif self.capturing:
             text='正在查看历史。实时收音和自动保存仍在继续。'
         else:
@@ -586,7 +634,7 @@ class Window(QMainWindow):
             key=get_key(profile)
         except Exception:
             for row in queued:self.history.update(row['id'],'failed',error='翻译设置不完整，请在设置菜单填写服务地址、模型和密钥')
-            self.notify('翻译设置不完整；原文识别和历史保存继续')
+            self.set_translation_status(False,'翻译设置不完整，请检查服务地址、模型和密钥')
             return
         for row in queued:
             if row['id'] in self.active_jobs:continue
@@ -608,11 +656,11 @@ class Window(QMainWindow):
                 if active_sid:self.pump(active_sid)
             return
         self.history.update(ident,'done' if success else 'failed',text if success else '', '' if success else text)
+        self.set_translation_status(success,'' if success else text)
         self.pump(sid)
         if self.current_session and self.current_session!=sid:self.pump(self.current_session)
         self.refresh_desktop()
         if sid==self.view_session:self.render()
-        if not success:self.notify(text+'；可在左下角重试或补译')
 
     def retry_current(self):
         if not self.view_session:
@@ -622,6 +670,7 @@ class Window(QMainWindow):
             self.notify('请先在设置中启用中文翻译')
             return
         for row in self.history.retryable(self.view_session):self.history.update(row['id'],'queued')
+        self.set_translation_status(None)
         self.pump(self.view_session)
         self.render()
         self.notify('已提交补译；将使用当前设置中的服务与模型')
@@ -645,6 +694,7 @@ class Window(QMainWindow):
         if self.worker:self.dialog.gain_preview.connect(self.worker.update_gain)
         if self.dialog.exec()==SettingsDialog.DialogCode.Accepted:
             self.settings=self.dialog.settings
+            self.set_translation_status(None)
             if self.worker:self.worker.update_gain(self.settings.get('agc'))
             affected=set()
             for sid,ident,*_ in self.translator.cancel_queued():
@@ -735,6 +785,7 @@ class Window(QMainWindow):
         session=self.history.session(sid) if sid else None
         self.retry_button.setEnabled(bool(session))
         if not session:
+            self.refresh_translation_warning()
             self._caption_key=None
             self.title.setText('实时字幕')
             self.subtitle.setText('本地 NPU 转录，云端多语言翻译')
@@ -754,6 +805,7 @@ class Window(QMainWindow):
         self.subtitle.setText(session['title']+'  ·  '+local_date(session['created_at'],'yyyy年MM月dd日 HH:mm'))
         self.subtitle.setToolTip(self.subtitle.text())
         rows=self.history.rows(sid,self.row_limit)
+        self.refresh_translation_warning(rows)
         count=self.history.db.execute('SELECT COUNT(*) FROM segments WHERE session_id=?',(sid,)).fetchone()[0]
         self.segment_count.setText(f'{count} 段 · 自动保存')
         self.more_rows.setVisible(count>len(rows))
@@ -761,7 +813,7 @@ class Window(QMainWindow):
         position=bar.value()
         follow=position>=bar.maximum()-30
         key=(sid,tuple(tuple(row.get(k) for k in ('id','en','zh','start_ms','uncertain','timing','status','error')) for row in rows),
-            tuple(sorted(c.items())),repr(self.appearance))
+            tuple(sorted(c.items())),repr(self.appearance),caption_visibility(self.settings))
         if key!=self._caption_key:
             self._caption_key=key
             render_captions(self.browser,rows,c,dict(self.settings,**self.appearance))

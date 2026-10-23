@@ -1,6 +1,7 @@
 """Validated typography and native QTextDocument layout (including line height)."""
 import math,re
 from PySide6.QtGui import QFont,QTextCursor,QTextCharFormat,QTextBlockFormat,QColor
+from caption_visibility import caption_visibility,visible_caption_pair
 
 FONT_FIELDS={'ui_font','english_font','chinese_font','preview_font'}
 LIMITS={
@@ -74,8 +75,10 @@ def render_captions(browser,rows,colors,settings):
         cursor.insertText(text,char)
     fonts={kind:make_font(t,kind,settings[kind+'_size']) for kind in ('english','chinese')}
     meta_font=make_font(t,'ui',max(10,t['ui_size']-2))
-    messages={'queued':'等待翻译','pending':'中文翻译中…','disabled':'中文翻译未启用','interrupted':'上次翻译未完成 · 可补译'}
+    show_source,show_translation=caption_visibility(settings)
     for row in rows:
+        source,translation=visible_caption_pair(row['en'],row['zh'],show_source,show_translation)
+        if not source and not translation:continue
         seconds=max(0,row['start_ms']//1000)
         stamp=f'{seconds//60:02d}:{seconds%60:02d}'
         if row.get('timing')=='approximate':stamp='≈ '+stamp
@@ -83,10 +86,9 @@ def render_captions(browser,rows,colors,settings):
         if row['uncertain']:
             char=QTextCharFormat();char.setFont(meta_font);char.setForeground(QColor(colors['warning']))
             cursor.insertText(' · 边界待核',char)
-        block(row['en'],colors['english'],fonts['english'],t['english_line'],t['bilingual_gap'])
-        text=row['zh'] or (row['error'] if row['status']=='failed' else messages.get(row['status'],''))
-        block(text,colors['chinese'] if row['zh'] else colors['muted'],fonts['chinese'],
-            t['chinese_line'],t['paragraph_gap'])
+        if source:block(source,colors['english'],fonts['english'],t['english_line'],
+            t['bilingual_gap'] if translation else t['paragraph_gap'])
+        if translation:block(translation,colors['chinese'],fonts['chinese'],t['chinese_line'],t['paragraph_gap'])
     # Space below the last caption without changing subtitle time or content.
     if rows:
         fmt=cursor.blockFormat();fmt.setBottomMargin(t['padding_y']+t['paragraph_gap']);cursor.setBlockFormat(fmt)

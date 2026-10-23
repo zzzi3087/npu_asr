@@ -23,6 +23,15 @@ def main():
         assert not result['model_files_bundled'],result['model_files_bundled']
         qt=QApplication([]);w=Window(start_workers=False);w.show();qt.processEvents()
         assert w.settings_button.menu() is None and w.source_summary.menu()
+        assert w.hide_source.text()=='不显示原文' and w.hide_translation.text()=='不显示译文'
+        assert w.desktop.windowTitle()=='桌面字幕'
+        from typography import render_captions
+        from PySide6.QtWidgets import QTextBrowser
+        fixture=QTextBrowser()
+        rows=[dict(en='Physics fixture.',zh='',start_ms=0,uncertain=False,status='failed',error='fixture API unavailable')]
+        render_captions(fixture,rows,w.colors,dict(w.settings,show_source=False,show_translation=True))
+        assert 'Physics fixture.' in fixture.toPlainText() and 'unavailable' not in fixture.toPlainText()
+        result['caption_visibility_and_error_fallback']=True
         w.on_event('download',{'model':'fixture','file':'fixture','completed':50,'total':100,'stage':'download'})
         assert w.start.text()=='取消下载';w.on_event('download_done',{})
         result['gui_created']=True

@@ -6,7 +6,7 @@ Windows 桌面实时转录与翻译软件。支持麦克风和桌面音频、双
 
 ## 安装与使用
 
-1. 在 [Releases](https://github.com/zzzi3087/npu_asr/releases/latest) 下载 `LiveCaptions-0.1.0-win64-setup.exe` 并安装。也可下载 portable ZIP，完整解压后运行 `LiveCaptions.exe`。
+1. 在 [Releases](https://github.com/zzzi3087/npu_asr/releases/latest) 下载 `LiveCaptions-0.1.1-win64-setup.exe` 并安装。更新前先退出已打开的软件。也可下载 portable ZIP，完整解压后运行 `LiveCaptions.exe`。
 2. 需要 Windows 11 x64、兼容 OpenVINO 的 **Intel NPU** 和已安装的 Intel NPU 驱动。软件自带运行库，不需要另装 Python。不同型号、驱动的编译兼容性可能不同；没有 NPU 时不会改用 CPU/GPU 转录。
 3. 首次启动检查模型；缺少的文件自动下载，并显示进度。可取消并在下次续传。下载后校验 SHA-256，完整模型会复用；首次 NPU 编译也需要等待。
 4. 在设置中选择模型、源语言、翻译语言和收音设备。顶部的音频来源可快速切换麦克风/桌面音频，点击“开始收音”开始。
@@ -35,6 +35,8 @@ Parakeet 首次下载约 1.2 GB，Qwen/Mega 各约 3 GB；相同文件尽量复�
 - 动态音量增益、静音门限与分句策略；低音量提升不能恢复录音中已经缺失的信息。
 - 领域词表：内置物理学、高能/理论物理、天体物理及暗物质术语，可编辑其他领域。Parakeet 使用 TDT 解码词组偏置；Qwen/Mega 使用上下文词表。增强效果取决于录音，词表过强也可能增加误报。
 - 主界面双语字幕、历史搜索、重命名、删除、重试翻译、导出。
+- 字幕上方的“不显示原文”“不显示译文”同时控制主页历史与桌面字幕，并记住选择；缺少译文时自动保留原文。两项都勾选则隐藏全部字幕文字。显示开关不删除历史，也不改变完整字幕的导出内容。
+- 翻译服务失败时，字幕区只显示可用的文字，错误集中在右下角“翻译 API 不可用”提示中；悬停可看原因。成功重试后提示自动消失。
 - 透明置顶桌面字幕：默认白字黑边、最近两句及翻译，可调整字体、颜色、字号、间距并预览。
 - 自定义全局配色、保存主题、配置导入/导出。
 - 停止收音时不持续进行 ASR 推理；下载进度和界面刷新节流，无持续动画。
@@ -71,6 +73,7 @@ ISCC /DBundleDir="<absolute-path-to-dist/LiveCaptions>" /DReleaseDir="<absolute-
 
 ```powershell
 python tools/check_model_downloads.py
+python tools/check_caption_visibility.py
 python tools/check_main_layout.py
 python tools/check_model_startup.py
 python tools/check_audio_ui.py

@@ -6,4 +6,4 @@ APP_DIR=Path(sys.executable).resolve().parent if getattr(sys,'frozen',False) els
 RESOURCE_DIR=Path(__file__).resolve().parent
 DATA=Path(os.environ.get('PARAKEET_DATA_DIR',str(Path(os.environ.get('LOCALAPPDATA',Path.home()/'.local/share'))/'ParakeetNPUSubtitles')))
 MODEL_ROOT=Path(os.environ.get('PARAKEET_MODEL_ROOT',str(DATA/'models')))
-VERSION='0.1.0'
+VERSION='0.1.1'
