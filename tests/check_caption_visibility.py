@@ -6,7 +6,8 @@ from http.server import ThreadingHTTPServer,BaseHTTPRequestHandler
 
 temporary=TemporaryDirectory(prefix='captions-visibility-');folder=Path(temporary.name)
 os.environ['QT_QPA_PLATFORM']='offscreen';os.environ['PARAKEET_DATA_DIR']=str(folder/'data')
-sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'src'))
+sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'tools'))
 from PySide6.QtCore import QTimer,QEventLoop,QPoint
 from PySide6.QtWidgets import QApplication
 from storage import default_settings,save_settings,load_settings

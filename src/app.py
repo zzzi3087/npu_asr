@@ -7,7 +7,7 @@ import html
 import queue
 import sys
 import uuid
-from PySide6.QtCore import Qt,QTimer,QDateTime,QTimeZone,QLockFile,QEvent,QSize
+from PySide6.QtCore import Qt,QTimer,QDateTime,QTimeZone,QLockFile,QEvent,QSize,Signal
 from PySide6.QtGui import QFont,QKeySequence,QShortcut,QTextCursor,QTextBlockFormat,QTextCharFormat,QColor
 from PySide6.QtWidgets import (QApplication,QMainWindow,QWidget,QFrame,QLabel,QPushButton,QToolButton,
     QVBoxLayout,QHBoxLayout,QComboBox,QLineEdit,QListWidget,QListWidgetItem,QTextBrowser,
@@ -24,6 +24,7 @@ from history_row import HistoryRow
 from workspace_header import WorkspaceHeader
 from app_paths import RESOURCE_DIR
 from caption_visibility import caption_visibility
+from tray_controller import TrayController
 from PySide6.QtGui import QIcon
 
 from theme import STYLE,apply_theme,normalize_colors
@@ -36,6 +37,8 @@ def local_date(value, pattern='MM月dd日  HH:mm'):
 
 
 class Window(QMainWindow):
+    exited=Signal()
+
     def __init__(self,autostart=False,start_workers=True):
         super().__init__()
         self.setWindowTitle('实时字幕')
@@ -48,6 +51,8 @@ class Window(QMainWindow):
         self.history=History(recover=True)
         self.current_session=self.view_session=None
         self.capturing=self.closing=self.ready=False
+        self._exit_requested=self._closed=self._in_tray=self._tray_dialog_hidden=False
+        self.tray=None
         self.active_source=None
         self.downloading=False
         self.translation_available=None;self.translation_error=''
@@ -73,6 +78,7 @@ class Window(QMainWindow):
         self.translator.result.connect(self.on_translation)
         self.translator.start()
         self.build_ui()
+        self.tray=TrayController(self)
         self.refresh_sessions()
         self.apply_display()
         if self.worker:
@@ -326,6 +332,39 @@ class Window(QMainWindow):
         options=self.desktop.options
         for control,key in ((self.desktop_button,'enabled'),):
             control.blockSignals(True);control.setChecked(options[key]);control.blockSignals(False)
+        self.sync_tray()
+
+    def sync_tray(self):
+        if self.tray:self.tray.refresh()
+
+    def hide_to_tray(self):
+        if self.closing or not self.tray or not self.tray.available:return False
+        if self.dialog and self.dialog.isVisible():
+            self._tray_dialog_hidden=True;self.dialog.hide()
+        self._in_tray=True;self.hide();self.sync_tray()
+        return True
+
+    def restore_from_tray(self):
+        if self.closing:return
+        self._in_tray=False;self.showNormal();self.raise_();self.activateWindow()
+        if self._tray_dialog_hidden and self.dialog:
+            self._tray_dialog_hidden=False;self.dialog.show()
+        if self.dialog and self.dialog.isVisible():
+            self.dialog.raise_();self.dialog.activateWindow()
+        elif self.workbench_dirty:self.render_now(force=True)
+
+    def request_quit(self):
+        self._exit_requested=True
+        if self.dialog:
+            job=self.dialog.save_job
+            if job and job.isRunning():
+                job.finished.connect(self.request_quit,Qt.ConnectionType.SingleShotConnection)
+                return
+            if job and self.dialog.result()==SettingsDialog.DialogCode.Accepted:return
+            self.dialog.reject()
+            # The settings exec() caller performs cleanup before closing us.
+            return
+        self.close()
 
     def refresh_source_summary(self):
         self.source_choices[self.settings['audio_source']['kind']]=dict(self.settings['audio_source'])
@@ -358,7 +397,7 @@ class Window(QMainWindow):
 
     def change_desktop(self,**changes):
         if self.closing:return
-        if self.dialog and self.dialog.isVisible():
+        if self.dialog:
             try:options=self.dialog.desktop_editor.values()
             except ValueError:options=dict(self.desktop.options)
             self.dialog.desktop_editor.set_values(dict(options,**changes),emit=True)
@@ -371,7 +410,7 @@ class Window(QMainWindow):
         self.refresh_desktop()
 
     def desktop_position_changed(self,position):
-        if self.dialog and self.dialog.isVisible():
+        if self.dialog:
             self.dialog.desktop_editor.set_position(position)
         else:
             self.settings['desktop_captions'].update(position)
@@ -564,7 +603,7 @@ class Window(QMainWindow):
             self.badge.setText('●  NPU 识别中')
             self.partial.setText('正在聆听…')
         elif kind=='level':
-            self.meter.setValue(value)
+            if not self._in_tray:self.meter.setValue(value)
         elif kind=='partial':
             self.last_partial=value['text']
             self.update_partial()
@@ -600,8 +639,11 @@ class Window(QMainWindow):
             self.state.setText('错误 · '+summary[:85]+('…' if len(summary)>85 else ''))
             self.state.setToolTip(detail)
             self.notify(summary[:100]);self.notice.setToolTip(detail)
+        if kind in ('ready','listening','stopped','error','download','download_done','download_cancelled'):self.sync_tray()
 
     def update_partial(self):
+        if self._in_tray:
+            self.workbench_dirty=True;return
         t=normalize_typography(self.appearance.get('typography'))
         self.partial.setFixedHeight(t['preview_height'])
         if self.capturing and self.view_session==self.current_session:
@@ -676,6 +718,7 @@ class Window(QMainWindow):
         self.notify('已提交补译；将使用当前设置中的服务与模型')
 
     def open_settings(self,*_,page=None):
+        if self._in_tray:self.restore_from_tray()
         if self.dialog and self.dialog.isVisible():
             if page=='desktop':self.dialog.tabs.setCurrentIndex(self.dialog.desktop_tab)
             elif page=='audio':self.dialog.tabs.setCurrentIndex(1)
@@ -715,6 +758,8 @@ class Window(QMainWindow):
         # exec() hides a QDialog but does not destroy parent-owned widgets.
         # Otherwise every later global theme change repolishes all past dialogs.
         dialog.secrets.clear();dialog.key.clear();dialog.deleteLater()
+        self._tray_dialog_hidden=False
+        if self._exit_requested:QTimer.singleShot(0,self.close)
 
     def test_connection(self,profile,key):
         try:self.translator.enqueue('test:'+uuid.uuid4().hex,'test','This is a test of real-time bilingual subtitles.',[],profile,key)
@@ -776,7 +821,7 @@ class Window(QMainWindow):
         self.render_pending=False
         if self.closing:return
         self.refresh_desktop()
-        if self.isMinimized() or (self.dialog and self.dialog.isVisible() and not force):
+        if self._in_tray or self.isMinimized() or (self.dialog and self.dialog.isVisible() and not force):
             self.workbench_dirty=True
             return
         self.workbench_dirty=False
@@ -822,10 +867,15 @@ class Window(QMainWindow):
 
     def changeEvent(self,event):
         super().changeEvent(event)
-        if event.type()==QEvent.Type.WindowStateChange and getattr(self,'workbench_dirty',False) and not self.isMinimized():
-            self.render()
+        if event.type()==QEvent.Type.WindowStateChange:
+            if self.isMinimized() and not getattr(self,'closing',False) and getattr(self,'settings',{}).get('minimize_to_tray',True):
+                QTimer.singleShot(0,self.hide_to_tray)
+            elif getattr(self,'workbench_dirty',False) and not self.isMinimized():self.render()
 
     def closeEvent(self,event):
+        if self._closed:event.accept();return
+        if not self._exit_requested and not self.closing and self.settings.get('close_to_tray',True):
+            if self.hide_to_tray():event.ignore();return
         inventory=getattr(QApplication.instance(),'_audio_inventory',None)
         running=(self.worker and self.worker.isRunning()) or self.translator.isRunning() or (inventory and inventory.isRunning())
         if running:
@@ -837,14 +887,17 @@ class Window(QMainWindow):
                     self.worker.stop_capture.set()
                     self.worker.commands.put(None)
                 self.translator.stop()
+                self.sync_tray()
             self.state.setText('正在保存并退出…')
             event.ignore()
             QTimer.singleShot(200,self.close)
         else:
             self.closing=True
             self.desktop.shutdown()
+            if self.tray:self.tray.shutdown()
             self.history.finish(self.current_session)
             self.history.close()
+            self._closed=True;self.exited.emit()
             event.accept()
 
 
@@ -853,12 +906,18 @@ def main():
     application.setApplicationName('实时字幕');application.setApplicationDisplayName('实时字幕')
     application.setFont(QFont('Microsoft YaHei UI',10))
     application.setStyleSheet(STYLE)
+    application.setQuitOnLastWindowClosed(False)
     DATA.mkdir(parents=True,exist_ok=True)
     lock=QLockFile(str(DATA/'application.lock'))
     if not lock.tryLock(0):
-        QMessageBox.information(None,'实时字幕','实时字幕已在运行，请使用已打开的窗口。')
+        from instance_activation import activate_existing
+        if activate_existing():return 0
+        QMessageBox.information(None,'实时字幕','程序正在运行或启动中，请点击系统托盘图标恢复窗口；退出后可重新打开。')
         return 0
     window=Window('--autostart' in sys.argv,start_workers='--ui-test' not in sys.argv)
+    from instance_activation import InstanceActivation
+    activation=InstanceActivation(window)
+    window.exited.connect(activation.close);window.exited.connect(application.quit)
     window.show()
     return application.exec()
 

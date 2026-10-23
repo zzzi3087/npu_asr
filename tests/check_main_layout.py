@@ -6,7 +6,7 @@ temporary=TemporaryDirectory(prefix='captions-layout-');root=Path(__file__).reso
 parser=argparse.ArgumentParser();parser.add_argument('--artifacts',type=Path);args=parser.parse_args()
 output=args.artifacts or Path(temporary.name);output.mkdir(parents=True,exist_ok=True)
 os.environ['QT_QPA_PLATFORM']='offscreen';os.environ['PARAKEET_DATA_DIR']=str(Path(temporary.name)/'data')
-sys.path.insert(0,str(root))
+sys.path.insert(0,str(root/'src'));sys.path.insert(0,str(root/'tools'))
 from PySide6.QtCore import Qt,QTimer,QEventLoop,QCoreApplication,QEvent,QPoint
 from PySide6.QtWidgets import QApplication,QFrame,QPushButton,QMessageBox,QInputDialog,QDialog
 from PySide6.QtTest import QTest

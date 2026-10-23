@@ -6,7 +6,8 @@ from http.server import ThreadingHTTPServer,BaseHTTPRequestHandler
 
 temporary=TemporaryDirectory(prefix='captions-download-');base=Path(temporary.name)
 os.environ['PARAKEET_DATA_DIR']=str(base/'data');os.environ['PARAKEET_MODEL_ROOT']=str(base/'models')
-sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'src'))
+sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'tools'))
 import model_manager as manager
 payload=bytes(range(256))*8192;requests=[];ignore_range=False;fail_once=False;slow=False
 class Handler(BaseHTTPRequestHandler):

@@ -258,7 +258,15 @@ class SettingsDialog(QDialog):
         self.desktop_editor.changed.connect(self.desktop_preview.emit)
         self.finished.connect(self.desktop_editor.timer.stop)
         self.desktop_tab=tabs.addTab(scroll_page(self.desktop_editor),'桌面字幕')
-        tabs.finalize(['收音设置','翻译服务','接口高级参数','桌面字幕','工作台字体','工作台配色','领域词表','存储与配置'])
+        background=QWidget();background_layout=QVBoxLayout(background);background_layout.setContentsMargins(16,20,16,16)
+        self.close_to_tray=QCheckBox('关闭主窗口时继续在托盘运行')
+        self.close_to_tray.setChecked(settings.get('close_to_tray',True));background_layout.addWidget(self.close_to_tray)
+        self.minimize_to_tray=QCheckBox('最小化时隐藏到托盘，不在任务栏显示')
+        self.minimize_to_tray.setChecked(settings.get('minimize_to_tray',True));background_layout.addWidget(self.minimize_to_tray)
+        tray_note=QLabel('隐藏窗口后，当前收音、翻译、历史保存和桌面字幕继续运行。\n\n点击托盘图标可恢复窗口；右键菜单可停止收音、显示或隐藏桌面字幕、打开设置或完全退出。\n\n完全退出请在托盘菜单选择“退出”。若系统托盘不可用，关闭窗口会正常退出。')
+        tray_note.setWordWrap(True);tray_note.setObjectName('muted');background_layout.addWidget(tray_note)
+        background_layout.addStretch();tabs.addTab(background,'后台与托盘')
+        tabs.finalize(['收音设置','翻译服务','接口高级参数','桌面字幕','后台与托盘','工作台字体','工作台配色','领域词表','存储与配置'])
         tabs.setCurrentIndex(1)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save|QDialogButtonBox.StandardButton.Cancel)
         buttons.button(QDialogButtonBox.StandardButton.Save).setText('保存设置')
@@ -394,6 +402,7 @@ class SettingsDialog(QDialog):
         result['desktop_captions']=self.desktop_editor.values()
         result['audio_source']=self.audio_source_editor.values()
         result.update(selected_profile=self.current['id'],translate=self.enabled.isChecked(),
+            close_to_tray=self.close_to_tray.isChecked(),minimize_to_tray=self.minimize_to_tray.isChecked(),
             opacity=self.opacity.value(),topmost=self.topmost.isChecked(),quiet=self.quiet.isChecked(),
             interval=self.interval.currentData(),segmentation=self.segmentation.currentData(),
             colors=self.theme_editor.validated_colors(),saved_themes=copy.deepcopy(self.theme_editor.saved_themes))
@@ -416,6 +425,7 @@ class SettingsDialog(QDialog):
         self.switch_profile()
         self.enabled.setChecked(settings['translate']);self.opacity.setValue(settings['opacity'])
         self.topmost.setChecked(settings['topmost']);self.quiet.setChecked(settings['quiet'])
+        self.close_to_tray.setChecked(settings.get('close_to_tray',True));self.minimize_to_tray.setChecked(settings.get('minimize_to_tray',True))
         self.interval.setCurrentIndex(max(0,self.interval.findData(settings['interval'])))
         self.segmentation.setCurrentIndex(self.segmentation.findData(settings['segmentation']))
         self.asr_model.setCurrentIndex(self.asr_model.findData(settings.get('asr_model','parakeet')))

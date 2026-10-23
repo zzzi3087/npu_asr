@@ -1,7 +1,8 @@
 """Install a verified program-local copy from the existing pinned model cache."""
 import hashlib,json,shutil,sys
 from pathlib import Path
-sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'src'))
+sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'tools'))
 from download_models import DEFAULT_MODEL_DIR,REVISION,REQUIRED_FILES
 
 

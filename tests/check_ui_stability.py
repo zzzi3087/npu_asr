@@ -8,7 +8,7 @@ parser=argparse.ArgumentParser();parser.add_argument('--artifacts',type=Path);ar
 artifacts=args.artifacts or test_root
 artifacts.mkdir(parents=True,exist_ok=True)
 os.environ['QT_QPA_PLATFORM']='offscreen';os.environ['PARAKEET_DATA_DIR']=str(test_root/'data')
-sys.path.insert(0,str(ROOT))
+sys.path.insert(0,str(ROOT/'src'));sys.path.insert(0,str(ROOT/'tools'))
 from PySide6.QtCore import Qt,QTimer,QEventLoop,QCoreApplication,QEvent,QPoint,QPointF
 from PySide6.QtGui import QWheelEvent,QFontDatabase
 from PySide6.QtWidgets import QApplication,QDialog,QScrollArea

@@ -1,7 +1,8 @@
 # Third-party notices
 
 The program uses independently licensed open-source components. Full license texts
-and installed dependency metadata are included in `third-party-licenses/` in the
+and installed dependency metadata are included in `licenses/third-party/` in the source
+and `third-party-licenses/` in the
 Windows distribution. Python and Qt libraries are dynamically distributed; their
 license terms and replacement rights continue to apply.
 
@@ -33,5 +34,5 @@ No model weights are included in the application installer or portable ZIP.
 Qwen and Mega files distributed separately are derived OpenVINO conversions:
 FP16 audio graphs, symmetric INT8 text weights and an embedding lookup table.
 Mega is the merged robust branch with routing disabled. The pinned public sources,
-SHA-256 checksums and download locations are recorded in `model-catalog.json`.
+SHA-256 checksums and download locations are recorded in `resources/model-catalog.json`.
 These conversions are community builds, not official upstream binary releases.

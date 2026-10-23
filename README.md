@@ -6,11 +6,13 @@ Windows 桌面实时转录与翻译软件。支持麦克风和桌面音频、双
 
 ## 安装与使用
 
-1. 在 [Releases](https://github.com/zzzi3087/npu_asr/releases/latest) 下载 `LiveCaptions-0.1.2-win64-setup.exe` 并安装。更新前先退出已打开的软件。也可下载 portable ZIP，完整解压后运行 `LiveCaptions.exe`。
+1. 在 [Releases](https://github.com/zzzi3087/npu_asr/releases/latest) 下载 `LiveCaptions-0.1.3-win64-setup.exe` 并安装。更新前先在托盘菜单选择“退出”。也可下载 portable ZIP，完整解压后运行 `LiveCaptions.exe`。
 2. 需要 Windows 11 x64、兼容 OpenVINO 的 **Intel NPU** 和已安装的 Intel NPU 驱动。软件自带运行库，不需要另装 Python。不同型号、驱动的编译兼容性可能不同；没有 NPU 时不会改用 CPU/GPU 转录。
 3. 首次启动检查模型；缺少的文件自动下载，并显示进度。可取消并在下次续传。下载后校验 SHA-256，完整模型会复用；首次 NPU 编译也需要等待。
 4. 在设置中选择模型、源语言、翻译语言和收音设备。顶部的音频来源可快速切换麦克风/桌面音频，点击“开始收音”开始。
 5. 翻译需要在设置的云服务页面填写自己的 API 地址、模型和密钥。兼容 OpenAI Chat Completions 和 Anthropic Messages 格式。仅转录时可关闭翻译，无需 API Key。
+6. 默认关闭或最小化主窗口后转入右下角系统托盘，任务栏窗口隐藏，收音、翻译和桌面字幕继续运行。点击托盘图标恢复窗口；右键可停止收音、切换桌面字幕、进入设置或完全退出。图标可能在 Windows 的隐藏图标菜单中。
+7. 在“设置 → 后台与托盘”可分别关闭上述行为。再次双击程序会恢复已有窗口，不会重复启动转录进程。
 
 安装程序当前没有代码签名证书。仅从本仓库 Releases 获取程序，并可用同页的 `SHA256SUMS.txt` 核对文件。
 
@@ -25,12 +27,13 @@ Windows 桌面实时转录与翻译软件。支持麦克风和桌面音频、双
 | Mega-ASR 1.7B | 多语言、抗噪对照 | 同上，合并抗噪分支，未启用动态路由 |
 | Silero VAD | 语音活动检测 | 独立模型资源包，仅约 2 MB |
 
-Parakeet 首次下载约 1.2 GB，Qwen/Mega 各约 3 GB；相同文件尽量复用。NPU 编译缓存另占磁盘空间。下载地址、原始来源、大小和 SHA-256 均列在 [model-catalog.json](model-catalog.json)。Qwen 基座采用 Mega-ASR 作者发布的固定 Qwen3-ASR-1.7B 检查点副本，具体提交见清单。
+Parakeet 首次下载约 1.2 GB，Qwen/Mega 各约 3 GB；相同文件尽量复用。NPU 编译缓存另占磁盘空间。下载地址、原始来源、大小和 SHA-256 均列在 [model-catalog.json](resources/model-catalog.json)。Qwen 基座采用 Mega-ASR 作者发布的固定 Qwen3-ASR-1.7B 检查点副本，具体提交见清单。
 
 三种 **ASR 神经网络** 都显式在 NPU 执行并检查执行设备，没有 CPU/GPU 转录回退。音频采集、分句、查表和文本解码使用 CPU；轻量 VAD 也在 CPU 执行。Parakeet 的确定性音频前处理可选 GPU，默认 CPU；这不改变 ASR 网络的 NPU 执行。
 
 ## 功能
 
+- 系统托盘后台运行；隐藏时暂缓主页字幕排版，无动画或常驻轮询定时器。
 - 设置窗口右上角显示当前程序版本，切换设置页面时始终可见，可选择复制。
 - 多语言转录和翻译；Parakeet v2 仅支持英语，多语言使用 Qwen/Mega。
 - 动态音量增益、静音门限与分句策略；低音量提升不能恢复录音中已经缺失的信息。
@@ -55,8 +58,8 @@ Parakeet 首次下载约 1.2 GB，Qwen/Mega 各约 3 GB；相同文件尽量复�
 使用 64 位 Python 3.13，创建虚拟环境后：
 
 ```powershell
-python -m pip install -r requirements-lock.txt
-python app.py
+python -m pip install -r requirements/runtime.txt
+python main.py
 ```
 
 构建 Windows 包需要同一运行环境、`packaging/requirements-build.txt` 和 Inno Setup 7：
@@ -68,17 +71,31 @@ python -m PyInstaller --noconfirm packaging/LiveCaptions.spec
 ISCC /DBundleDir="<absolute-path-to-dist/LiveCaptions>" /DReleaseDir="<absolute-output-folder>" packaging/installer.iss
 ```
 
-模型转换开发另见 `tools/export_qwen_npu.py`、`tools/export_mega_npu.py` 和 `tools/conversion-requirements.txt`，普通用户无需转换。`PARAKEET_DATA_DIR` 和 `PARAKEET_MODEL_ROOT` 可覆盖本地数据/模型目录，主要用于隔离测试。
+模型转换开发另见 `tools/export_qwen_npu.py`、`tools/export_mega_npu.py` 和 `requirements/conversion.txt`，普通用户无需转换。`PARAKEET_DATA_DIR` 和 `PARAKEET_MODEL_ROOT` 可覆盖本地数据/模型目录，主要用于隔离测试。
+
+## 源码目录
+
+```text
+main.py        源码启动入口
+src/           程序代码（界面、音频、模型与翻译）
+tests/         隔离测试与回归检查
+tools/         模型转换和构建辅助工具
+packaging/     Windows 打包配置
+resources/     模型下载清单、图标与公开元数据
+requirements/  运行和转换依赖
+licenses/      第三方许可与版权说明
+```
 
 离线检查：
 
 ```powershell
-python tools/check_model_downloads.py
-python tools/check_caption_visibility.py
-python tools/check_main_layout.py
-python tools/check_model_startup.py
-python tools/check_audio_ui.py
-python tools/check_ui_stability.py
+python tests/check_model_downloads.py
+python tests/check_caption_visibility.py
+python tests/check_tray.py
+python tests/check_main_layout.py
+python tests/check_model_startup.py
+python tests/check_audio_ui.py
+python tests/check_ui_stability.py
 ```
 
 安装后的可执行文件另提供 `--smoke-test --report <local-json-path>`，用于隔离测试界面、音频运行库和 NPU。加 `--model parakeet --wav <wav-path>` 可验证真实模型转录；缺少模型会下载。测试不会启动麦克风收音。
@@ -88,9 +105,8 @@ python tools/check_ui_stability.py
 多语言支持
 转录本地音频文件
 省电优化
-后台运行
 界面优化
 
 ## 许可与致谢
 
-程序源码采用 Apache-2.0；改编的 MIT 代码保留原许可。感谢 FluidInference/eddy、Nerdstorm/LiveTranscribe、NVIDIA、Qwen、Mega-ASR 作者、OpenVINO、Silero 和 Qt 等项目。程序与独立下载的模型分别遵循各自许可，详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 和 `third-party-licenses/`。
+程序源码采用 Apache-2.0；改编的 MIT 代码保留原许可。感谢 FluidInference/eddy、Nerdstorm/LiveTranscribe、NVIDIA、Qwen、Mega-ASR 作者、OpenVINO、Silero 和 Qt 等项目。程序与独立下载的模型分别遵循各自许可，详见 [THIRD_PARTY_NOTICES.md](licenses/THIRD_PARTY_NOTICES.md) 和 `licenses/third-party/`。

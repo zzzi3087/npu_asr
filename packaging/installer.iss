@@ -7,7 +7,7 @@
 [Setup]
 AppId={{7795B538-B180-4CC8-9DE4-26FCE739732A}
 AppName=实时字幕
-AppVersion=0.1.2
+AppVersion=0.1.3
 AppPublisher=npu_asr contributors
 AppPublisherURL=https://github.com/zzzi3087/npu_asr
 DefaultDirName={localappdata}\Programs\LiveCaptions
@@ -20,14 +20,14 @@ MinVersion=10.0.22000
 Compression=lzma2/normal
 SolidCompression=yes
 OutputDir={#ReleaseDir}
-OutputBaseFilename=LiveCaptions-0.1.2-win64-setup
-SetupIconFile=..\assets\app.ico
+OutputBaseFilename=LiveCaptions-0.1.3-win64-setup
+SetupIconFile=..\resources\assets\app.ico
 UninstallDisplayIcon={app}\LiveCaptions.exe
 WizardStyle=modern
 DisableWelcomePage=no
 CloseApplications=no
 RestartApplications=no
-LicenseFile=..\THIRD_PARTY_NOTICES.md
+LicenseFile=..\licenses\THIRD_PARTY_NOTICES.md
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
 [Tasks]

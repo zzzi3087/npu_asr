@@ -4,7 +4,8 @@ HTTP ranges skip the 2.47 GB weight file. No archive path is extracted to disk.
 """
 import io,requests,tarfile,hashlib,json,sys
 from pathlib import Path
-sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'src'))
+sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'tools'))
 from download_models import MODEL_DIR
 REV='ae9ad07059c7c739ffaf932226a8fe64ae2620b0'
 URL=f'https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2/resolve/{REV}/parakeet-tdt-0.6b-v2.nemo'

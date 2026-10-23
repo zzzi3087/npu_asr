@@ -6,7 +6,7 @@ root=Path(__file__).resolve().parents[1];temp=TemporaryDirectory(prefix='live-ca
 parser=argparse.ArgumentParser();parser.add_argument('--artifacts',type=Path);args=parser.parse_args()
 output=args.artifacts or Path(temp.name);output.mkdir(parents=True,exist_ok=True)
 os.environ['QT_QPA_PLATFORM']='offscreen';os.environ['PARAKEET_DATA_DIR']=str(Path(temp.name)/'data')
-sys.path.insert(0,str(root))
+sys.path.insert(0,str(root/'src'));sys.path.insert(0,str(root/'tools'))
 from PySide6.QtCore import Qt,QTimer,QEventLoop,QCoreApplication,QEvent
 from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import QApplication,QComboBox,QDialog
@@ -55,7 +55,8 @@ def edit_cancel():
     try:
         d=w.dialog;nav=d.tabs.navigation
         names=[nav.item(i).text() for i in range(nav.count())]
-        assert len(names)==len(set(names))==d.tabs.count()==8,names
+        assert len(names)==len(set(names))==d.tabs.count()==9,names
+        assert '后台与托盘' in names
         assert '声音与语言' not in names and '词表与数据' not in names and '音量增益' not in names
         assert '收音设置' in names
         for i in range(nav.count()):

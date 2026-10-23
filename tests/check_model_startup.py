@@ -6,7 +6,7 @@ temporary=TemporaryDirectory(prefix='captions-model-startup-');root=Path(__file_
 parser=argparse.ArgumentParser();parser.add_argument('--artifacts',type=Path);args=parser.parse_args()
 output=args.artifacts or Path(temporary.name);output.mkdir(parents=True,exist_ok=True)
 os.environ['QT_QPA_PLATFORM']='offscreen';os.environ['PARAKEET_DATA_DIR']=str(Path(temporary.name)/'data')
-sys.path.insert(0,str(root))
+sys.path.insert(0,str(root/'src'));sys.path.insert(0,str(root/'tools'))
 from model_io import read_ir
 from download_models import model_directory,REQUIRED_FILES,REVISION
 from install_local_parakeet import install

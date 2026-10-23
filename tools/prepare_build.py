@@ -26,11 +26,11 @@ def main():
     for size,data in images:
         icon+=struct.pack('<BBBBHHII',size%256,size%256,0,0,1,32,len(data),offset);offset+=len(data)
     for _,data in images:icon+=data
-    (ROOT/'assets').mkdir(exist_ok=True);(ROOT/'assets/app.ico').write_bytes(icon)
-    target=ROOT/'third-party-licenses';target.mkdir(exist_ok=True)
+    (ROOT/'resources/assets').mkdir(parents=True,exist_ok=True);(ROOT/'resources/assets/app.ico').write_bytes(icon)
+    target=ROOT/'licenses/third-party';target.mkdir(exist_ok=True)
     records=[]
     names=[]
-    for line in (ROOT/'requirements-lock.txt').read_text().splitlines():
+    for line in (ROOT/'requirements/runtime.txt').read_text().splitlines():
         if '==' in line:names.append(line.split('==')[0])
     names+=['Python','PyInstaller','pyinstaller-hooks-contrib']
     for name in names:
@@ -62,7 +62,7 @@ def main():
             if source.is_file():
                 destination=folder/Path(*parts[1:]);destination.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(source,destination)
     (target/'DEPENDENCIES.json').write_text(json.dumps(records,ensure_ascii=False,indent=2),'utf-8')
-    for source in ROOT.glob('*LICENSE.txt'):shutil.copyfile(source,target/source.name)
+    for source in (ROOT/'licenses').glob('*LICENSE.txt'):shutil.copyfile(source,target/source.name)
     for name,url in {'LGPL-3.0.txt':'https://raw.githubusercontent.com/qt/qtbase/dev/LICENSES/LGPL-3.0-only.txt','GPL-3.0.txt':'https://raw.githubusercontent.com/qt/qtbase/dev/LICENSES/GPL-3.0-only.txt'}.items():
         path=target/name
         if not path.exists():

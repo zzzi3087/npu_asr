@@ -1,7 +1,7 @@
 import os,json,hashlib,time,requests
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-j=json.loads((Path(__file__).parent/'Mega-ASR-metadata.json').read_text())
+j=json.loads((Path(__file__).resolve().parents[1]/'resources'/'Mega-ASR-metadata.json').read_text())
 root=Path(os.environ['LOCALAPPDATA'])/'ParakeetNPUSubtitles/models/mega-asr-source'
 root.mkdir(parents=True,exist_ok=True)
 files=[x for x in j['siblings'] if x['rfilename'].startswith(('Qwen3-ASR-1.7B/','mega-asr-merged/','audio_quality_router/')) and not x['rfilename'].endswith(('.gitattributes','README.md'))]

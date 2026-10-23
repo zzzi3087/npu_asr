@@ -2,7 +2,8 @@
 import argparse,json,sys,os
 os.environ.setdefault('OPENBLAS_NUM_THREADS','1')
 from pathlib import Path
-sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'src'))
+sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'tools'))
 import soundfile as sf,soxr
 from qwen_engine import QwenEngine
 p=argparse.ArgumentParser();p.add_argument('wav');p.add_argument('--model',choices=['qwen3-asr-1.7b','mega-asr'],default='qwen3-asr-1.7b')

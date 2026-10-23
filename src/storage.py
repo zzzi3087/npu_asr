@@ -26,6 +26,7 @@ def utc_now():
 def default_settings():
     return {'version': 3, 'main_layout_version':2, 'selected_profile': 'deepseek', 'translate': True,
         'show_source':True,'show_translation':True,
+        'close_to_tray':True,'minimize_to_tray':True,
         'asr_model':'parakeet','source_language':'auto','target_language':'简体中文','agc':dict(DEFAULT_AGC),'feature_backend':'numpy','domain_bias':default_domain_bias(),'desktop_captions':default_desktop_captions(),
         'english_size': 24, 'chinese_size': 22, 'opacity': 100, 'topmost': False,
         'quiet': True, 'interval': 1.5, 'segmentation': 'balanced', 'colors':dict(DEFAULT_COLORS),
@@ -60,6 +61,8 @@ def load_settings(directory=DATA):
     defaults['desktop_captions']=normalize_desktop_captions(defaults.get('desktop_captions'))
     defaults['audio_source']=normalize_audio_source(saved.get('audio_source'),legacy=defaults.get('microphone_name',''))
     defaults['show_source'],defaults['show_translation']=caption_visibility(defaults)
+    for key in ('close_to_tray','minimize_to_tray'):
+        if type(defaults[key]) is not bool:defaults[key]=True
     return defaults
 
 

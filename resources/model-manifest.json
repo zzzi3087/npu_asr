@@ -1,0 +1,17 @@
+{
+  "repository": "FluidInference/parakeet-tdt-0.6b-v2-ov",
+  "revision": "e115adf711921df9378e383d01190901f0057704",
+  "sha256": {
+    "config.json": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+    "parakeet_decoder.bin": "a6d5df2a0c926db666503d6ded9188e32acd663770f7ccd78f0d12d29592787e",
+    "parakeet_decoder.xml": "debdf8b2f3136f0c6b59031a9c88a7e307b57ae622637d2438836fc8a28e365f",
+    "parakeet_encoder.bin": "c5a5af1b4e5ae02e94841a96f08b6dc3ecbf161ff7b772a4f408e14814e8493d",
+    "parakeet_encoder.xml": "f190c6fa02be77e9056313649226499487f79946af81e92af63862c99b749f44",
+    "parakeet_joint.bin": "3e73ee839409648653b2d59ba2c614d56ca8f69e90cb42fe82f3df077a861c0f",
+    "parakeet_joint.xml": "f61e2c90f6fd9ea85acd60a5b367fc6d8933d900b4970381d7d4328b19d4532e",
+    "parakeet_melspectogram.bin": "d49220d2836f811d426907267e64fbb935a0e3c6e4777a721b3fb375df1981e3",
+    "parakeet_melspectogram.xml": "65ee3e6a5b32eaedcd905edd9f86b07cb27ef7796a8a5ff33c800c8c8706ae28",
+    "parakeet_vocab.json": "57019fe3c745772ca83a1b048a4bb951cd51329504ea33d4d83316b96e279a97",
+    "README.md": "294b317fd9abd2f7f942cdc19afef6d65eb8ed8d98c12acb25b9e43b8d9dca9c"
+  }
+}
