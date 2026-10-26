@@ -4,7 +4,8 @@ from collections import deque
 from pathlib import Path
 import numpy as np
 import onnxruntime as ort
-from segmentation import SentenceAssembler
+from segmentation import SentenceAssembler,endpoint_samples
+from text_rules import normalized,SMALL_NUMBERS,TENS
 from audio_gain import DynamicGain
 from model_manager import model_file
 
@@ -29,22 +30,6 @@ class Vad:
         output, self.state = self.model.run(None,self.feeds)
         self.context[:]=self.input[:,-64:]
         return float(output.reshape(-1)[0])
-
-
-SMALL_NUMBERS = dict(zip('zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen'.split(), range(20)))
-TENS = dict(zip('twenty thirty forty fifty sixty seventy eighty ninety'.split(), range(20, 100, 10)))
-
-
-def normalized(word):
-    parts = re.sub(r'[^a-z0-9]+', ' ', word.lower()).split()
-    if len(parts) == 1:
-        if parts[0] in SMALL_NUMBERS:
-            return str(SMALL_NUMBERS[parts[0]])
-        if parts[0] in TENS:
-            return str(TENS[parts[0]])
-    if len(parts) == 2 and parts[0] in TENS and parts[1] in SMALL_NUMBERS and 0 < SMALL_NUMBERS[parts[1]] < 10:
-        return str(TENS[parts[0]] + SMALL_NUMBERS[parts[1]])
-    return ''.join(parts) or word
 
 
 def number_groups(words):
@@ -122,7 +107,7 @@ class Timeline:
         else:
             previous = self.previous[self.cut(self.previous):]
             for (word, stamp), (old, old_stamp) in zip(remaining, previous):
-                if normalized(word) != normalized(old) or abs(stamp-old_stamp) > .45 or stamp > end-1.0:
+                if normalized(word) != normalized(old) or abs(stamp-old_stamp) > .45 or stamp > end-.45:
                     break
                 stable += 1
             stable = min(stable, max(0, len(remaining)-1))
@@ -148,6 +133,8 @@ class Recognizer:
         self.vad = Vad()
         self.quiet = quiet
         self.interval_samples = int(interval * 16000)
+        self.silence_limit=endpoint_samples(segmentation,quiet)
+        self.latest=None
         self.gain = 1.
         self.speech_run = 0
         self.voice_samples = 0
@@ -205,6 +192,7 @@ class Recognizer:
                 for previous in self.pre:
                     self.append(previous)
                 self.base = self.clock - self.size
+                self.pre.clear()
                 self.append(block)
                 self.last_infer = self.base
             else:
@@ -225,8 +213,10 @@ class Recognizer:
             for event in events:self.emit('committed',event)
             self.preview([])
             return
-        final = stop or self.silence >= (17920 if self.quiet else 12800)
-        due = len(self.audio) >= 32000 and self.clock-self.last_infer >= self.interval_samples
+        final = stop or self.silence >= self.silence_limit
+        # Once a pause starts, wait for its endpoint rather than decoding the
+        # same words once for a preview and again a few hundred ms later.
+        due = self.size >= 16000 and self.clock-self.last_infer >= self.interval_samples and self.silence<2560
         if not final and not due:
             return
         if len(self.audio) > self.engine.max_samples:
@@ -238,6 +228,7 @@ class Recognizer:
             self.storage[:self.size-excess] = self.storage[excess:self.size]
             self.size -= excess
             self.base += excess
+            self.latest=None
         if len(self.audio) < 4000 or self.voice_samples < (1536 if self.quiet else 512):
             if final:
                 self.reset()
@@ -246,7 +237,9 @@ class Recognizer:
                         self.emit('committed',event)
                     self.preview([])
             return
-        result = self.engine.infer(self.audio)
+        reusable=final and self.latest is not None and self.last_infer>=self.last_voice_clock+2560
+        result=self.latest if reusable else self.engine.infer(self.audio)
+        self.latest=result
         self.last_infer = self.clock
         new, preview = self.timeline.update(result['words'], self.base/16000, self.clock/16000, final)
         hypothesis = [(word,self.base/16000+stamp) for word,stamp in number_groups(result['words'])]
@@ -254,10 +247,18 @@ class Recognizer:
             final=stop,acoustic_end=final,idle=(self.clock-self.last_voice_clock)/16000,pauses=self.pauses)
         for event in events:self.emit('committed',event)
         self.preview(preview)
-        self.emit('metrics', {'infer_ms': result['infer_ms'], 'audio_seconds': len(self.audio)/16000,
-                            'cpu_ms': result.get('cpu_ms', 0), **self.agc.metrics()})
-        if final:
-            self.reset()
+        if not reusable:
+            self.emit('metrics', {'infer_ms': result['infer_ms'], 'audio_seconds': len(self.audio)/16000,
+                                'cpu_ms': result.get('cpu_ms', 0), **self.agc.metrics()})
+        if final:self.reset()
+        elif self.size>=192000 and self.timeline.confirmed:
+            # Retain at least six seconds and 0.8 s before the latest confirmed
+            # word. Only confirmed audio can leave the inference window.
+            keep=min(self.timeline.confirmed[-1][1]-.8,self.clock/16000-6.)
+            trim=max(0,int(keep*16000)-self.base)
+            if trim>=64000:
+                self.storage[:self.size-trim]=self.storage[trim:self.size]
+                self.size-=trim;self.base+=trim;self.latest=None
 
     def preview(self,tail):
         text=' '.join(part for part in (self.segmenter.text,' '.join(word for word,_ in tail)) if part)
@@ -274,4 +275,5 @@ class Recognizer:
         self.voice_samples = 0
         self.speech_run = 0
         self.silence = 0
+        self.latest=None
         self.timeline = Timeline()

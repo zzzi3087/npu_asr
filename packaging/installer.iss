@@ -7,7 +7,7 @@
 [Setup]
 AppId={{7795B538-B180-4CC8-9DE4-26FCE739732A}
 AppName=实时字幕
-AppVersion=0.2.2
+AppVersion=0.2.3
 AppPublisher=npu_asr contributors
 AppPublisherURL=https://github.com/zzzi3087/npu_asr
 DefaultDirName={localappdata}\Programs\LiveCaptions
@@ -20,7 +20,7 @@ MinVersion=10.0.22000
 Compression=lzma2/normal
 SolidCompression=yes
 OutputDir={#ReleaseDir}
-OutputBaseFilename=LiveCaptions-0.2.2-win64-setup
+OutputBaseFilename=LiveCaptions-0.2.3-win64-setup
 SetupIconFile=..\resources\assets\app.ico
 UninstallDisplayIcon={app}\LiveCaptions.exe
 WizardStyle=modern

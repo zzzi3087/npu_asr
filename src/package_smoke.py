@@ -18,6 +18,16 @@ def main():
             test_catalog=json.loads(args.catalog_file.read_text('utf-8'))['models']
             model_manager.catalog=lambda:test_catalog
         result['version']=VERSION
+        from segmentation import TextAssembler,endpoint_samples
+        from text_agreement import TextAgreement
+        assert .76<endpoint_samples('balanced',True)/16000<.78
+        assembly=TextAssembler()
+        assert not assembly.update('The energy is approximately.',0,12,now=12,window_limit=True,language='English')
+        joined=assembly.update('one hundred GeV. We continue.',12,15,now=16,idle=1,language='English')
+        assert [event['text'] for event in joined]==['The energy is approximately one hundred GeV.','We continue.']
+        agreement=TextAgreement();agreement.update('The sample is ready. We continue')
+        assert agreement.update('The sample is ready. We continue today.')[0]=='The sample is ready.'
+        result['incremental_sentence_segmentation']=True
         result['catalog_loaded']=set(model_manager.catalog())=={'parakeet','qwen3-asr-1.7b','mega-asr','silero-vad'}
         result['model_files_bundled']=[str(p.relative_to(RESOURCE_DIR)) for p in RESOURCE_DIR.rglob('*') if p.is_file() and p.suffix.lower() in {'.onnx','.bin','.npy','.npz','.model','.safetensors','.pt','.pth'}]
         assert not result['model_files_bundled'],result['model_files_bundled']

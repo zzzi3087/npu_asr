@@ -197,6 +197,7 @@ class SettingsDialog(QDialog):
         for title,value in [('均衡 · 标点与停顿','balanced'),('整句优先 · 更少切分','sentence'),('低延迟 · 更快提交','fast')]:
             self.segmentation.addItem(title,value)
         self.segmentation.setCurrentIndex(max(0,self.segmentation.findData(settings.get('segmentation','balanced'))))
+        self.segmentation.setToolTip('完整句子优先提交，未完成短语跨停顿拼接。整句优先保留更长上下文；低延迟更早确认停顿。保存后下次收音生效。')
         appearance.addRow('分句策略',self.segmentation)
         agc=normalize_agc(settings.get('agc'))
         self.agc_enabled=QCheckBox('自动动态增益');self.agc_enabled.setChecked(agc['enabled'])
