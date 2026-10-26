@@ -22,6 +22,10 @@ def create(source_root,output,upload_manifest):
     files.append(entry(folder/'tokenizer.model'))
     models['parakeet']={'name':'Parakeet v2','directory':REVISION,'source':'FluidInference/parakeet-tdt-0.6b-v2-ov',
         'revision':REVISION,'license':'CC-BY-4.0','files':files}
+    v3=json.loads((ROOT/'resources/model-catalog.json').read_text('utf-8'))['models'].get('parakeet-v3')
+    if v3:
+        v3['files']=[entry(source_root/v3['directory']/item['name'],item['url']) for item in v3['files']]
+        models['parakeet-v3']=v3
     qwen_files=['manifest.json','vocab.json','merges.txt','tokenizer_config.json','config.json',
         'audio-conv.xml','audio-conv.bin','audio-encoder.xml','audio-encoder.bin','text.xml','text.bin']
     for ident,directory,name in [('qwen3-asr-1.7b','qwen3-asr-1.7b-npu','Qwen3-ASR 1.7B'),('mega-asr','mega-asr-1.7b-npu','Mega-ASR')]:

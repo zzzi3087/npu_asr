@@ -64,7 +64,7 @@ class QwenRecognizer:
         reusable=final and self.latest is not None and self.last_infer>=self.last_voice_clock+2560
         result=self.latest if reusable else self.engine.infer(self.storage[:self.size])
         self.latest=result;self.latest_size=self.size;self.last_infer=self.clock
-        confirmed,preview,lo,hi=self.agreement.update(result['text'],final=final)
+        confirmed,preview,lo,hi=self.agreement.update(result['text'],final=final,language=result.get('language','auto'))
         if not reusable:self.emit('metrics',dict(infer_ms=result['infer_ms'],cpu_ms=result.get('cpu_ms',0),
             audio_seconds=self.size/16000,source_language=result.get('language','auto'),**self.agc.metrics()))
         if confirmed or stop:

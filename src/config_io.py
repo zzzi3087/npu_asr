@@ -5,7 +5,7 @@ from urllib.parse import urlsplit,urlunsplit,parse_qsl,urlencode
 from storage import default_settings
 from theme import DEFAULT_COLORS,normalize_colors,normalize_theme
 from typography import normalize_typography
-from languages import LANGUAGES
+from languages import LANGUAGES,ASR_MODELS,supported_language
 from audio_gain import DEFAULT_AGC,normalize_agc
 from domain_bias import normalize_domain_bias
 from desktop_caption_config import normalize_desktop_captions
@@ -50,9 +50,10 @@ def validate_configuration(value):
     if result['interval'] not in (1.,1.5,2.):raise ValueError('预览间隔须为 1、1.5 或 2 秒')
     if result['segmentation'] not in ('balanced','sentence','fast'):raise ValueError('不支持的分句策略')
     result['typography']=normalize_typography(result['typography'],strict=True)
-    if result['asr_model'] not in ('parakeet','qwen3-asr-1.7b','mega-asr'):raise ValueError('不支持的转录模型')
+    if result['asr_model'] not in {ident for _,ident in ASR_MODELS}:raise ValueError('不支持的转录模型')
     if result['feature_backend'] not in ('numpy','gpu'):raise ValueError('不支持的音频特征计算设备')
     if result['source_language'] not in {item[0] for item in LANGUAGES}:raise ValueError('不支持的转录语言')
+    if not supported_language(result['asr_model'],result['source_language']):raise ValueError('所选模型不支持此转录语言')
     if not isinstance(result['target_language'],str) or not 1<=len(result['target_language'])<=80:raise ValueError('翻译目标语言无效')
     if not isinstance(result['agc'],dict):raise ValueError('增益参数必须是对象')
     result['agc']=normalize_agc(result['agc'])

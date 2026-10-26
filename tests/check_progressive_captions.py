@@ -30,7 +30,7 @@ class Engine:
         self.calls+=1
         return dict(text=long,words=[(w,.25*i) for i,w in enumerate(long.split())],language='English',infer_ms=1)
 
-for model,cls in [('parakeet',streaming.Recognizer),('qwen3-asr-1.7b',qwen_streaming.QwenRecognizer),('mega-asr',qwen_streaming.QwenRecognizer)]:
+for model,cls in [('parakeet',streaming.Recognizer),('parakeet-v3',streaming.Recognizer),('qwen3-asr-1.7b',qwen_streaming.QwenRecognizer),('mega-asr',qwen_streaming.QwenRecognizer)]:
     calls=[]
     for enabled in (False,True):
         events=[];engine=Engine(model);r=cls(engine,lambda k,v:events.append((k,v)),progressive=enabled)
@@ -123,7 +123,7 @@ finally:t.stop();assert t.wait(2000);translation.requests.Session=original
 # Revised boundaries and stale/deleted sessions cannot resurrect an old preview.
 d=DraftCaptions();r=d.add('one',draft);d.link('one',0,'final','Short.');assert not d.entries
 r=d.add('one',draft);d.discard_session('one');assert not d.translated(r['id'],'old',True)
-print(json.dumps(dict(all_three_models=True,no_extra_asr_calls=True,one_request_per_long_sentence=True,
+print(json.dumps(dict(all_four_models=True,no_extra_asr_calls=True,one_request_per_long_sentence=True,
     stable_prefix_only=True,atomic_full_replacement=True,failed_final_preserves_draft=True,
     no_duplicate_history_or_exports=True,late_results_ignored=True,queue_pressure_skips_drafts=True,
     optional_request_timeout_and_no_retry=True,settings_roundtrip=True)))

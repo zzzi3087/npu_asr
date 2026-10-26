@@ -24,13 +24,13 @@ class TextAgreement:
         end=min(range(len(row)),key=lambda j:(row[j],abs(j-count)))
         return spans[end-1].end() if end else 0
 
-    def update(self,text,final=False):
+    def update(self,text,final=False,language='English'):
         """Return newly confirmed text, remaining preview and character offsets."""
         start=self.offset(text);tail=text[start:].strip();limit=0
         old=self.previous[self.offset(self.previous):].strip()
         if final:limit=len(tail)
         else:
-            for lo,hi in sentence_spans(tail):
+            for lo,hi in sentence_spans(tail,language):
                 part=tail[:hi]
                 if not tail[hi:].strip() or not terminal(part.split()[-1]):break
                 if not old.startswith(part):break

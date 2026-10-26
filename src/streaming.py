@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import onnxruntime as ort
 from segmentation import SentenceAssembler,endpoint_samples
-from text_rules import normalized,SMALL_NUMBERS,TENS
+from text_rules import normalized,terminal,complete_text,SMALL_NUMBERS,TENS
 from audio_gain import DynamicGain
 from model_manager import model_file
 
@@ -62,6 +62,20 @@ def quiet_gain(audio, maximum=32., target=.025):
     return max(1., min(maximum, target / rms, .9 / max(peak, 1e-9)))
 
 
+def timed_hypothesis(result,base):
+    words=result['words']
+    # Group by position, not timestamp: TDT can emit several words at one frame.
+    grouped=number_groups([(word,index) for index,(word,_) in enumerate(words)])
+    hypothesis=[(word,base+words[index][1]) for word,index in grouped]
+    spans=result.get('word_spans')
+    if not spans or len(spans)!=len(words):return hypothesis,None
+    ends=[]
+    for index,(_,position) in enumerate(grouped):
+        boundary=grouped[index+1][1] if index+1<len(grouped) else len(words)
+        ends.append(base+max(span[2] for span in spans[position:boundary]))
+    return hypothesis,ends
+
+
 class Timeline:
     def __init__(self):
         self.confirmed = []
@@ -86,11 +100,13 @@ class Timeline:
         # time consumes an already committed word even if ASR revised its text.
         # The old suffix-only match left that revision at the head forever.
         cost = [0.] * (len(candidates)+1)
+        reference=[(normalized(word),stamp) for word,stamp in reference]
+        candidates=[(normalized(word),stamp) for word,stamp in candidates]
         for word, stamp in reference:
             row = [cost[0]+1.5]
             for j,(other, other_stamp) in enumerate(candidates,1):
                 dt = abs(stamp-other_stamp)
-                substitution = (0. if normalized(word)==normalized(other) else .75) + dt*1.5
+                substitution = (0. if word==other else .75) + dt*1.5
                 if dt > .7:
                     substitution = 10.
                 row.append(min(cost[j-1]+substitution, cost[j]+1.5, row[-1]+1.5))
@@ -136,6 +152,8 @@ class Recognizer:
         self.quiet = quiet
         self.interval_samples = int(interval * 16000)
         self.silence_limit=endpoint_samples(segmentation,quiet)
+        self.stable_silence_limit=endpoint_samples('fast',quiet) if segmentation=='balanced' else self.silence_limit
+        self.stable_voice=-1
         self.latest=None
         self.gain = 1.
         self.speech_run = 0
@@ -149,7 +167,7 @@ class Recognizer:
         self.silence = 0
         self.last_infer = 0
         self.timeline = Timeline()
-        self.segmenter = SentenceAssembler(segmentation)
+        self.segmenter = SentenceAssembler(segmentation,language=getattr(engine,'language','English'))
         self.pauses = deque(maxlen=128)
         self.pause_start = None
         self.last_voice_clock = 0
@@ -158,6 +176,10 @@ class Recognizer:
     @property
     def audio(self):
         return self.storage[:self.size]
+
+    def commit(self,event):
+        self.emit('committed',dict(event,asr_model=getattr(self.engine,'model_id','parakeet'),
+            source_language=getattr(self.engine,'language','English')))
 
     def append(self, block):
         if self.size + len(block) > len(self.storage):
@@ -212,10 +234,13 @@ class Recognizer:
         if not self.active:
             events = self.segmenter.update([],None,self.clock/16000,final=stop,
                 idle=(self.clock-self.last_voice_clock)/16000,pauses=self.pauses)
-            for event in events:self.emit('committed',event)
+            for event in events:self.commit(event)
             self.preview([])
             return
-        final = stop or self.silence >= self.silence_limit
+        # A repeatedly unchanged, punctuated tail with word timing covering
+        # the latest voice can use the fast endpoint. No extra preview/timer.
+        stable_end=self.stable_voice>=self.last_voice_clock and self.silence>=self.stable_silence_limit
+        final = stop or self.silence >= self.silence_limit or stable_end
         # Once a pause starts, wait for its endpoint rather than decoding the
         # same words once for a preview and again a few hundred ms later.
         due = self.size >= 16000 and self.clock-self.last_infer >= self.interval_samples and self.silence<2560
@@ -236,21 +261,28 @@ class Recognizer:
                 self.reset()
                 if stop:
                     for event in self.segmenter.update([],None,self.clock/16000,final=True):
-                        self.emit('committed',event)
+                        self.commit(event)
                     self.preview([])
             return
         reusable=final and self.latest is not None and self.last_infer>=self.last_voice_clock+2560
         result=self.latest if reusable else self.engine.infer(self.audio)
+        previous=self.latest
+        self.stable_voice=-1
+        spans=result.get('word_spans',())
+        if previous and spans and result['text']==previous['text'] and terminal(spans[-1][0]) and complete_text(result['text'],getattr(self.engine,'language','English')):
+            end=self.base/16000+spans[-1][2]
+            if self.last_voice_clock/16000-.32<=end<=self.clock/16000+.08:
+                self.stable_voice=self.last_voice_clock
         self.latest=result
         self.last_infer = self.clock
         new, preview = self.timeline.update(result['words'], self.base/16000, self.clock/16000, final)
-        hypothesis = [(word,self.base/16000+stamp) for word,stamp in number_groups(result['words'])]
+        hypothesis,ends=timed_hypothesis(result,self.base/16000)
         events = self.segmenter.update(new,hypothesis,self.clock/16000,uncertain=self.timeline.last_forced,
-            final=stop,acoustic_end=final,idle=(self.clock-self.last_voice_clock)/16000,pauses=self.pauses)
-        for event in events:self.emit('committed',event)
+            final=stop,acoustic_end=final,idle=(self.clock-self.last_voice_clock)/16000,pauses=self.pauses,ends=ends)
+        for event in events:self.commit(event)
         if self.prefix and self.segmenter.words and not stop:
             value=self.prefix.offer(self.segmenter.text,self.segmenter.sequence,self.clock/16000,
-                self.segmenter.words[0].stamp,'English')
+                self.segmenter.words[0].stamp,getattr(self.engine,'language','English'))
             if value:self.emit('provisional',value)
         self.preview(preview)
         if not reusable:
@@ -282,4 +314,5 @@ class Recognizer:
         self.speech_run = 0
         self.silence = 0
         self.latest=None
+        self.stable_voice=-1
         self.timeline = Timeline()

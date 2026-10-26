@@ -3,7 +3,7 @@ from PySide6.QtCore import Qt,Signal
 from PySide6.QtWidgets import (QDialog,QVBoxLayout,QHBoxLayout,QLabel,QPushButton,QTreeWidget,
     QTreeWidgetItem,QProgressBar,QCheckBox,QFileDialog,QHeaderView,QComboBox)
 from file_queue import LABELS,FINISHED,FILE_MODELS
-from languages import LANGUAGES
+from languages import LANGUAGES,supported_language
 
 
 class FileTree(QTreeWidget):
@@ -39,7 +39,7 @@ class FileQueueDialog(QDialog):
         self.model_combo.currentIndexChanged.connect(self.change_asr_options)
         self.language_combo.currentIndexChanged.connect(self.change_asr_options)
         self.model_combo.setToolTip('只影响之后添加的文件，已有队列任务保持原模型；不改变实时字幕模型。')
-        self.language_combo.setToolTip('文件转录语言独立保存；Parakeet 仅支持英语，其他语言请选择 Qwen/Mega。')
+        self.language_combo.setToolTip('文件转录语言独立保存。Parakeet v3 自动辨别欧洲语言，手动语言用于分句与翻译提示；中文请选择 Qwen/Mega。')
         self.options_label=QLabel();self.options_label.setWordWrap(True);layout.addWidget(self.options_label)
         options=QHBoxLayout()
         self.normalize=QCheckBox('自动调整响度');self.normalize.setChecked(self.queue.preprocessing['normalize'])
@@ -86,16 +86,16 @@ class FileQueueDialog(QDialog):
     def sync_asr_options(self):
         key=(self.queue.asr_options['asr_model'],self.queue.asr_options['source_language'])
         if getattr(self,'_asr_key',None)==key and (self.model_combo.currentData(),self.language_combo.currentData())==key:return
-        for control,key in ((self.model_combo,'asr_model'),(self.language_combo,'source_language')):
-            control.blockSignals(True);control.setCurrentIndex(control.findData(self.queue.asr_options[key]));control.blockSignals(False)
-        parakeet=self.queue.asr_options['asr_model']=='parakeet'
+        for control,field in ((self.model_combo,'asr_model'),(self.language_combo,'source_language')):
+            control.blockSignals(True);control.setCurrentIndex(control.findData(self.queue.asr_options[field]));control.blockSignals(False)
+        model=self.queue.asr_options['asr_model']
         for index in range(self.language_combo.count()):
-            self.language_combo.model().item(index).setEnabled(not parakeet or self.language_combo.itemData(index) in ('auto','English'))
+            self.language_combo.model().item(index).setEnabled(supported_language(model,self.language_combo.itemData(index)))
         self._asr_key=key
 
     def change_asr_options(self):
         model=self.model_combo.currentData();language=self.language_combo.currentData()
-        if model=='parakeet' and language not in ('auto','English'):language='auto'
+        if not supported_language(model,language):language='auto'
         self.queue.set_asr_options(model,language);self.sync_asr_options()
 
     def choose_files(self):

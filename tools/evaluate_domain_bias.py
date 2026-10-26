@@ -14,14 +14,15 @@ from storage import load_settings
 from domain_bias import active_domain,build_context
 from engine import Engine
 from qwen_engine import QwenEngine
-from languages import LANGUAGES
+from languages import LANGUAGES,ASR_MODELS,PARAKEET_MODELS,supported_language
+from model_manager import ensure_model
 
 def normalized(text):return ''.join(c for c in text.casefold() if c.isalnum())
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('manifest',type=Path);parser.add_argument('--domain',help='profile ID or exact name; defaults to selected profile')
-    parser.add_argument('--models',nargs='+',choices=['parakeet','qwen3-asr-1.7b','mega-asr'],default=['qwen3-asr-1.7b','mega-asr'])
+    parser.add_argument('--models',nargs='+',choices=[key for _,key in ASR_MODELS],default=['qwen3-asr-1.7b','mega-asr'])
     parser.add_argument('--output',type=Path,required=True);args=parser.parse_args()
     config,profile=active_domain(load_settings()['domain_bias'])
     if args.domain:
@@ -42,13 +43,17 @@ def main():
         clips.append((dict(item,id=item.get('id',str(index)),terms=terms),audio))
     results=[]
     for model in args.models:
-        e=Engine() if model=='parakeet' else QwenEngine(model_id=model,max_prompt=512)
+        folder=ensure_model(model)
+        e=Engine(model_id=model,model_dir=folder) if model in PARAKEET_MODELS else QwenEngine(model_id=model,max_prompt=512,model_dir=folder)
         for item,audio in clips:
             language=item.get('language','auto')
-            if model=='parakeet' and language not in ('English','auto'):
-                results.append(dict(model=model,sample=item['id'],skipped='Parakeet is English only'));continue
+            if not supported_language(model,language):
+                results.append(dict(model=model,sample=item['id'],skipped='Unsupported model/language combination'));continue
             for enabled in (False,True):
-                if model=='parakeet':e.configure_terms([t for t in profile['terms'] if all(ord(c)<128 for c in t)] if enabled else (),config['strength'])
+                if model in PARAKEET_MODELS:
+                    e.language='English' if model=='parakeet' else language
+                    terms=[t for t in profile['terms'] if model=='parakeet-v3' or all(ord(c)<128 for c in t)]
+                    e.configure_terms(terms if enabled else (),config['strength'])
                 else:e.language=language;e.context=build_context(profile) if enabled else ''
                 out=e.infer(audio)
                 results.append(dict(model=model,sample=item['id'],enabled=enabled,expected_terms=item['terms'],devices=e.devices,

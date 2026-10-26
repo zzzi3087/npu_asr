@@ -10,5 +10,20 @@ LANGUAGES=[('auto','自动识别','Automatic'),('Chinese','中文普通话','Chi
     ('Czech','捷克语','Czech'),('Filipino','菲律宾语','Filipino'),('Persian','波斯语','Persian'),
     ('Greek','希腊语','Greek'),('Hungarian','匈牙利语','Hungarian'),('Macedonian','马其顿语','Macedonian'),
     ('Romanian','罗马尼亚语','Romanian')]
+QWEN_LANGUAGES=frozenset(name for name,_,_ in LANGUAGES)
+LANGUAGES += [('Bulgarian','保加利亚语','Bulgarian'),('Croatian','克罗地亚语','Croatian'),
+    ('Estonian','爱沙尼亚语','Estonian'),('Latvian','拉脱维亚语','Latvian'),('Lithuanian','立陶宛语','Lithuanian'),
+    ('Maltese','马耳他语','Maltese'),('Slovak','斯洛伐克语','Slovak'),('Slovenian','斯洛文尼亚语','Slovenian'),
+    ('Ukrainian','乌克兰语','Ukrainian')]
+PARAKEET_V3_LANGUAGES=frozenset('Bulgarian Croatian Czech Danish Dutch English Estonian Finnish French German Greek Hungarian Italian Latvian Lithuanian Maltese Polish Portuguese Romanian Slovak Slovenian Spanish Swedish Russian Ukrainian'.split())
+ASR_MODELS=(('Parakeet v2 · 英语 · NPU','parakeet'),('Parakeet v3 · 25 种欧洲语言 · NPU','parakeet-v3'),
+    ('Qwen3-ASR 1.7B · 多语言 · NPU','qwen3-asr-1.7b'),('Mega-ASR · 抗噪 · NPU','mega-asr'))
+PARAKEET_MODELS=frozenset(('parakeet','parakeet-v3'))
+
+def supported_language(model,language):
+    if model=='parakeet':return language in ('auto','English')
+    if model=='parakeet-v3':return language=='auto' or language in PARAKEET_V3_LANGUAGES
+    return model in ('qwen3-asr-1.7b','mega-asr') and language in QWEN_LANGUAGES
+
 TARGETS=[('简体中文','简体中文'),('繁體中文','繁體中文')]+[(name,label) for name,label,_ in LANGUAGES if name not in ('auto','Chinese')]
 def label(language):return next((text for name,text,_ in LANGUAGES if name==language),language)

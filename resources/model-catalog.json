@@ -246,6 +246,75 @@
           "url": "https://github.com/zzzi3087/npu_asr/releases/download/models-v1/1a153a22f4509e29-silero_vad.onnx"
         }
       ]
+    },
+    "parakeet-v3": {
+      "name": "Parakeet v3 · 25 种欧洲语言",
+      "directory": "parakeet-v3-b299728668074299b2d19208d30d28460ad81adb",
+      "source": "FluidInference/parakeet-tdt-0.6b-v3-ov",
+      "revision": "b299728668074299b2d19208d30d28460ad81adb",
+      "license": "CC-BY-4.0",
+      "files": [
+        {
+          "name": "parakeet_melspectogram.xml",
+          "size": 49228,
+          "sha256": "720a6f85ec6ed40571366af5335d55497ed06eeb4377528406849ca334176f8d",
+          "url": "https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v3-ov/resolve/b299728668074299b2d19208d30d28460ad81adb/parakeet_melspectogram.xml"
+        },
+        {
+          "name": "parakeet_melspectogram.bin",
+          "size": 477078,
+          "sha256": "a20c3299f863b03ccb0b91465fd02f1d5eddd749bc44418e3674e7a6b88b1116",
+          "url": "https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v3-ov/resolve/b299728668074299b2d19208d30d28460ad81adb/parakeet_melspectogram.bin"
+        },
+        {
+          "name": "parakeet_encoder.xml",
+          "size": 2087748,
+          "sha256": "bc7369ef23f15e2f40049c808419f0cf33a996f546f678f3058eb29b1d54344b",
+          "url": "https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v3-ov/resolve/b299728668074299b2d19208d30d28460ad81adb/parakeet_encoder.xml"
+        },
+        {
+          "name": "parakeet_encoder.bin",
+          "size": 1185869036,
+          "sha256": "52999e4ed1595470a80b9e0666ddcf9948c0b36f437967cb319c5c332c13e88e",
+          "url": "https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v3-ov/resolve/b299728668074299b2d19208d30d28460ad81adb/parakeet_encoder.bin"
+        },
+        {
+          "name": "parakeet_decoder.xml",
+          "size": 35652,
+          "sha256": "56f7b82cd7b92f015f015f127c03244a13b157f3fef9dd931ae8e598fa892e56",
+          "url": "https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v3-ov/resolve/b299728668074299b2d19208d30d28460ad81adb/parakeet_decoder.xml"
+        },
+        {
+          "name": "parakeet_decoder.bin",
+          "size": 23604560,
+          "sha256": "d32d703eed045f38564362b3f07a2405ff274b192001b9088d363b7b832edf8d",
+          "url": "https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v3-ov/resolve/b299728668074299b2d19208d30d28460ad81adb/parakeet_decoder.bin"
+        },
+        {
+          "name": "parakeet_joint.xml",
+          "size": 13798,
+          "sha256": "40eed670feca317031450f9700f3813b2e7d3d634780a6ca418ee5d09c8ab56c",
+          "url": "https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v3-ov/resolve/b299728668074299b2d19208d30d28460ad81adb/parakeet_joint.xml"
+        },
+        {
+          "name": "parakeet_joint.bin",
+          "size": 12642332,
+          "sha256": "e88f298ad8ca8d90ff50b0147281a3ca8cf677550619513c0013a3160b57f001",
+          "url": "https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v3-ov/resolve/b299728668074299b2d19208d30d28460ad81adb/parakeet_joint.bin"
+        },
+        {
+          "name": "parakeet_vocab.json",
+          "size": 119760,
+          "sha256": "8a98bc7de07683588c8bd420a57b38c8842d8d860085d9e8f788f975dda36ca8",
+          "url": "https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v3-ov/resolve/b299728668074299b2d19208d30d28460ad81adb/parakeet_vocab.json"
+        },
+        {
+          "name": "tokenizer.json",
+          "size": 1159960,
+          "sha256": "bd321b096832a3f270bd3b2a88823957920f1a5c5ada71114a26ea729d0cbe91",
+          "url": "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3/resolve/541d1f99c6b0c3cd0b11a95167540bb8edefd82b/tokenizer.json"
+        }
+      ]
     }
   }
 }

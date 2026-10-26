@@ -18,7 +18,7 @@ class DomainEditor(QWidget):
     def __init__(self,value=None,parent=None):
         super().__init__(parent);self.current=None;self.loading=False
         root=QVBoxLayout(self);root.setContentsMargins(20,22,20,20);root.setSpacing(12)
-        note=QLabel('保存与切换不同专业的背景和术语。仅所选领域生效，三个模型分别启用；保存后下次开始收音时应用。')
+        note=QLabel('保存与切换不同专业的背景和术语。仅所选领域生效，各模型分别启用；保存后下次开始收音时应用。')
         note.setWordWrap(True);note.setObjectName('muted');root.addWidget(note)
         row=QHBoxLayout();self.selector=QComboBox();self.selector.currentIndexChanged.connect(self.switch)
         row.addWidget(self.selector,1)
@@ -36,7 +36,7 @@ class DomainEditor(QWidget):
         form.addRow('术语 / 完整词组',self.terms)
         self.counter=QLabel();self.counter.setObjectName('muted');self.counter.setWordWrap(True);form.addRow(self.counter)
         self.flags={}
-        for key,label in [('parakeet','Parakeet：英文词组加权（实验）'),('qwen','Qwen：背景与术语提示'),('mega','Mega：背景与术语提示（单独对照效果）')]:
+        for key,label in [('parakeet','Parakeet v2：英文词组加权（实验）'),('parakeet_v3','Parakeet v3：多语言词组加权（实验）'),('qwen','Qwen：背景与术语提示'),('mega','Mega：背景与术语提示（单独对照效果）')]:
             field=QCheckBox(label);self.flags[key]=field;form.addRow(field)
         self.strength=QDoubleSpinBox();self.strength.setRange(0,2);self.strength.setSingleStep(.1);self.strength.setDecimals(1)
         form.addRow('Parakeet 加权强度',self.strength)

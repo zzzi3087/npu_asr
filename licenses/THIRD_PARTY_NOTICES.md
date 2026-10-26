@@ -38,6 +38,10 @@ No model weights are included in the application installer or portable ZIP.
   https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v2-ov
   Original: https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2
 - Qwen3-ASR 1.7B: Apache-2.0. https://huggingface.co/Qwen/Qwen3-ASR-1.7B
+- NVIDIA Parakeet TDT 0.6B v3, OpenVINO conversion by FluidInference: CC-BY-4.0.
+  https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v3-ov
+  Original model and tokenizer: https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3
+  Model graphs are unmodified; application DSP, decoding and segmentation are adapted.
 - Mega-ASR: Apache-2.0. https://huggingface.co/zhifeixie/Mega-ASR
 - Silero VAD: MIT. https://github.com/snakers4/silero-vad
 

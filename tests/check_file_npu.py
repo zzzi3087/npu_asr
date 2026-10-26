@@ -3,7 +3,7 @@ import argparse,json,os,sys,time,threading
 from pathlib import Path
 from tempfile import TemporaryDirectory
 parser=argparse.ArgumentParser();parser.add_argument('wav',type=Path)
-parser.add_argument('--models',nargs='+',choices=['parakeet','qwen3-asr-1.7b','mega-asr'],default=['parakeet'])
+parser.add_argument('--models',nargs='+',choices=['parakeet','parakeet-v3','qwen3-asr-1.7b','mega-asr'],default=['parakeet'])
 args=parser.parse_args()
 temporary=TemporaryDirectory(prefix='captions-file-npu-')
 os.environ.setdefault('OPENBLAS_NUM_THREADS','1');os.environ.setdefault('OMP_NUM_THREADS','1')

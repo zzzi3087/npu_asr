@@ -4,7 +4,7 @@ from pathlib import Path
 
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('--smoke-test',action='store_true')
-    parser.add_argument('--report',type=Path,required=True);parser.add_argument('--model',choices=['parakeet','qwen3-asr-1.7b','mega-asr'])
+    parser.add_argument('--report',type=Path,required=True);parser.add_argument('--model',choices=['parakeet','parakeet-v3','qwen3-asr-1.7b','mega-asr'])
     parser.add_argument('--wav',type=Path);parser.add_argument('--catalog-file',type=Path)
     args=parser.parse_args();os.environ['QT_QPA_PLATFORM']='offscreen'
     result={};w=None
@@ -36,7 +36,7 @@ def main():
         drafts=DraftCaptions();row=drafts.add('fixture',draft);drafts.link('fixture',0,'final',source)
         drafts.translated(row['id'],'临时译文',True);drafts.finish('final');assert not drafts.entries
         result['progressive_caption_replacement']=True
-        result['catalog_loaded']=set(model_manager.catalog())=={'parakeet','qwen3-asr-1.7b','mega-asr','silero-vad'}
+        result['catalog_loaded']=set(model_manager.catalog())=={'parakeet','parakeet-v3','qwen3-asr-1.7b','mega-asr','silero-vad'}
         result['model_files_bundled']=[str(p.relative_to(RESOURCE_DIR)) for p in RESOURCE_DIR.rglob('*') if p.is_file() and p.suffix.lower() in {'.onnx','.bin','.npy','.npz','.model','.safetensors','.pt','.pth'}]
         assert not result['model_files_bundled'],result['model_files_bundled']
         qt=QApplication([]);w=Window(start_workers=False);w.show();qt.processEvents()

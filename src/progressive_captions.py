@@ -23,7 +23,7 @@ class StablePrefix:
         target=min(max(small,stable//2),large,stable-4);count=None
         for candidate in sorted(range(small,min(large,stable-4)+1),key=lambda n:abs(n-target)):
             word=spans[candidate-1].group();following=spans[candidate].group()
-            if plain(word) not in DANGLING and not joins_continuation(word,following):
+            if plain(word) not in DANGLING and not joins_continuation(word,following,language):
                 count=candidate;break
         if count is None:return None
         self.sent=True

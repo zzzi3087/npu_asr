@@ -56,13 +56,14 @@ class AudioWorker(QThread):
             raise
 
     def _load_engine(self,options):
+        from languages import PARAKEET_MODELS,supported_language
         model_id=options.get('asr_model','parakeet')
         language=options.get('source_language','auto')
         feature_backend=options.get('feature_backend','numpy') if model_id=='parakeet' else 'numpy'
         bias=model_bias(options.get('domain_bias'),model_id)
         engine_key=(model_id,feature_backend,bool(bias['context']))
-        if model_id=='parakeet' and language not in ('auto','English'):
-            raise RuntimeError('Parakeet v2 仅支持英语，请选择 Qwen3-ASR 或 Mega-ASR 进行多语言识别')
+        if not supported_language(model_id,language):
+            raise RuntimeError('所选模型不支持此转录语言，请更换模型或选择自动识别')
         if self.engine_key!=engine_key:
             import gc
             self.engine=None;gc.collect()
@@ -79,16 +80,18 @@ class AudioWorker(QThread):
                 for ident in (model_id,'silero-vad'):
                     paths[ident]=ensure_model(ident,self.download_cancel,lambda progress:self.event.emit('download',progress))
             finally:self.event.emit('download_done',{})
-            if model_id=='parakeet':
-                self.engine=Engine(lambda message:self.event.emit('status',message),feature_backend=feature_backend,model_dir=paths[model_id])
+            if model_id in PARAKEET_MODELS:
+                self.engine=Engine(lambda message:self.event.emit('status',message),feature_backend=feature_backend,model_dir=paths[model_id],model_id=model_id,language=language)
                 self.engine.infer(np.zeros(32000,np.float32))
             elif model_id in ('qwen3-asr-1.7b','mega-asr'):
                 from qwen_engine import QwenEngine
                 self.engine=QwenEngine(lambda message:self.event.emit('status',message),model_id,language,context=bias['context'],model_dir=paths[model_id])
             else:raise RuntimeError('不支持的转录模型；不回退 CPU/GPU')
             self.engine_key=engine_key
-        if model_id!='parakeet':self.engine.language=language;self.engine.context=bias['context']
-        else:self.engine.configure_terms(bias['terms'],bias['strength'])
+        if model_id not in PARAKEET_MODELS:self.engine.language=language;self.engine.context=bias['context']
+        else:
+            self.engine.language='English' if model_id=='parakeet' else language
+            self.engine.configure_terms(bias['terms'],bias['strength'])
 
     def emit(self, kind, value):
         if kind == 'committed':

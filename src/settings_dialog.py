@@ -11,7 +11,7 @@ from theme_editor import ThemeEditor
 from typography_editor import TypographyEditor
 from config_io import export_configuration,import_configuration
 from audio_gain import normalize_agc
-from languages import LANGUAGES,TARGETS
+from languages import LANGUAGES,TARGETS,ASR_MODELS,PARAKEET_MODELS,supported_language
 from domain_editor import DomainEditor
 from desktop_caption_editor import DesktopCaptionEditor
 from settings_pages import SettingsPages,Foldout
@@ -150,8 +150,7 @@ class SettingsDialog(QDialog):
         self.audio_source_editor=AudioSourceEditor(settings.get('audio_source'))
         appearance.addRow(self.audio_source_editor)
         self.asr_model=QComboBox()
-        for name,value in [('Parakeet v2 · 英语 · NPU','parakeet'),('Qwen3-ASR 1.7B · 多语言 · NPU','qwen3-asr-1.7b'),
-                           ('Mega-ASR · 固定抗噪分支 · NPU 实验版','mega-asr')]:self.asr_model.addItem(name,value)
+        for name,value in ASR_MODELS:self.asr_model.addItem(name,value)
         self.asr_model.setCurrentIndex(max(0,self.asr_model.findData(settings.get('asr_model','parakeet'))))
         self.asr_model.setToolTip('仅控制实时收音字幕；本地音频文件请在“音频文件 · 队列”中单独选择模型。')
         appearance.addRow('实时字幕模型',self.asr_model)
@@ -167,13 +166,13 @@ class SettingsDialog(QDialog):
         if index>=0:self.target_language.setCurrentIndex(index)
         else:self.target_language.setEditText(selected)
         form.insertRow(1,'翻译目标语言',self.target_language)
-        model_note=QLabel('全部转录神经网络严格使用 NPU，不自动回退。Parakeet v2 仅支持英语；Qwen/Mega 的预览至少每 3 秒更新，时间轴为近似值。Mega 使用固定抗噪权重，不启用路由器。')
+        model_note=QLabel('全部转录神经网络严格使用 NPU。Parakeet v2 仅英语；v3 自动辨别 25 种欧洲语言，保留标点和词时间戳，语言选项仅作分句与翻译提示。中文请选择 Qwen/Mega；其预览至少每 3 秒更新，时间轴为近似值。')
         model_note.setWordWrap(True);model_note.setObjectName('muted');appearance.addRow(model_note)
         self.feature_backend=QComboBox()
         self.feature_backend.addItem('CPU · 默认', 'numpy')
         self.feature_backend.addItem('GPU · FP32 · 实验', 'gpu')
         self.feature_backend.setCurrentIndex(max(0,self.feature_backend.findData(settings.get('feature_backend','numpy'))))
-        feature_note=QLabel('GPU 选项只处理 Parakeet 的频谱特征；全部转录网络仍使用 NPU。可降低部分 CPU 用时，整机省电效果尚未确认。下次收音生效。')
+        feature_note=QLabel('GPU 选项只处理 Parakeet v2 的频谱特征；v3 使用轻量 CPU FFT 前处理。全部转录网络仍使用 NPU。整机省电效果需结合实际负载测试。下次收音生效。')
         feature_note.setWordWrap(True);feature_note.setObjectName('muted')
         self.typography_editor=TypographyEditor(settings)
         self.typography_editor.changed.connect(self.typography_preview.emit)
@@ -306,8 +305,11 @@ class SettingsDialog(QDialog):
         self.update_dependencies()
 
     def update_dependencies(self,*_):
-        parakeet=self.asr_model.currentData()=='parakeet'
-        self.feature_backend.setEnabled(parakeet);self.interval.setEnabled(parakeet)
+        model=self.asr_model.currentData()
+        self.feature_backend.setEnabled(model=='parakeet');self.interval.setEnabled(model in PARAKEET_MODELS)
+        for index in range(self.source_language.count()):
+            self.source_language.model().item(index).setEnabled(supported_language(model,self.source_language.itemData(index)))
+        if not supported_language(model,self.source_language.currentData()):self.source_language.setCurrentIndex(self.source_language.findData('auto'))
         self.interval.setToolTip('Parakeet 的预览间隔；Qwen/Mega 使用至少 3 秒的预览间隔')
         anthropic=self.protocol.currentData()=='anthropic'
         self.version.setEnabled(anthropic);self.workspace.setEnabled(anthropic)
@@ -390,7 +392,7 @@ class SettingsDialog(QDialog):
         target=current if self.target_language.currentIndex()>=0 and self.target_language.currentText()==self.target_language.itemText(self.target_language.currentIndex()) else self.target_language.currentText().strip()
         if not target or len(target)>80:raise ValueError('请填写有效目标语言')
         source=self.source_language.currentData();model=self.asr_model.currentData()
-        if model=='parakeet' and source not in ('auto','English'):raise ValueError('Parakeet v2 仅支持英语，请选择 Qwen3-ASR 或 Mega-ASR')
+        if not supported_language(model,source):raise ValueError('所选模型不支持此转录语言')
         return dict(asr_model=model,source_language=source,target_language=target,agc=self.agc_values(),feature_backend=self.feature_backend.currentData())
 
     def draft(self):

@@ -4,11 +4,9 @@ from pathlib import Path
 import uuid
 from PySide6.QtCore import QObject,Signal,QTimer
 from app_paths import DATA
-from languages import LANGUAGES
+from languages import LANGUAGES,ASR_MODELS,supported_language
 
-FILE_MODELS=(('Parakeet v2 · 英语 · NPU','parakeet'),
-    ('Qwen3-ASR 1.7B · 多语言 · NPU','qwen3-asr-1.7b'),
-    ('Mega-ASR · 抗噪 · NPU','mega-asr'))
+FILE_MODELS=ASR_MODELS
 
 
 def file_asr_options(value=None,strict=False):
@@ -20,8 +18,8 @@ def file_asr_options(value=None,strict=False):
     if language not in {ident for ident,_,_ in LANGUAGES}:
         if strict:raise ValueError('请选择支持的本地文件转录语言')
         language='auto'
-    if model=='parakeet' and language not in ('auto','English'):
-        if strict:raise ValueError('本地文件选择 Parakeet 时仅支持英语，请改用 Qwen3-ASR 或 Mega-ASR')
+    if not supported_language(model,language):
+        if strict:raise ValueError('所选文件转录模型不支持此语言，请选择其他模型或自动识别')
         language='auto'
     return {'asr_model':model,'source_language':language}
 

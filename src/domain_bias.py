@@ -2,7 +2,7 @@
 import math,re,uuid
 
 def default_domain_bias():
-    return {'active':'physics-en','parakeet':False,'qwen':False,'mega':False,'strength':1.2,'profiles':[
+    return {'active':'physics-en','parakeet':False,'parakeet_v3':False,'qwen':False,'mega':False,'strength':1.2,'profiles':[
         {'id':'physics-en','name':'物理学 · 英语','background':'Particle physics, theoretical physics and astrophysics.',
          'terms':['Schwarzschild','Feynman','Kaluza-Klein','axions','weakly interacting massive particles','neutrino oscillation','quantum field theory','quantum chromodynamics','Higgs boson','Lorentz symmetry','AdS/CFT','renormalization']},
         {'id':'physics-zh','name':'物理学 · 中文','background':'高能物理、理论物理与天体物理。',
@@ -22,7 +22,7 @@ def normalize_domain_bias(value=None,strict=False):
         if value is None:return default_domain_bias()
         if not isinstance(value,dict):raise ValueError('领域词表配置必须是对象')
         result=default_domain_bias()
-        for key in ('parakeet','qwen','mega'):
+        for key in ('parakeet','parakeet_v3','qwen','mega'):
             v=value.get(key,False)
             if type(v) is not bool:raise ValueError('领域增强开关必须是布尔值')
             result[key]=v
@@ -69,10 +69,11 @@ def build_context(profile):
 
 def model_bias(value,model_id):
     config,profile=active_domain(value)
-    key={'parakeet':'parakeet','qwen3-asr-1.7b':'qwen','mega-asr':'mega'}.get(model_id)
+    key={'parakeet':'parakeet','parakeet-v3':'parakeet_v3','qwen3-asr-1.7b':'qwen','mega-asr':'mega'}.get(model_id)
     if not key or not config[key]:return {'context':'','terms':[],'strength':0.}
     if model_id=='parakeet':
         terms=[t for t in profile['terms'] if all(ord(c)<128 for c in t)]
         if not terms:raise ValueError('Parakeet 需要英文词组，请切换到英文领域方案')
         return {'context':'','terms':terms,'strength':config['strength']}
+    if model_id=='parakeet-v3':return {'context':'','terms':profile['terms'],'strength':config['strength']}
     return {'context':build_context(profile),'terms':[],'strength':0.}
