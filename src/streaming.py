@@ -124,8 +124,10 @@ class Timeline:
 
 
 class Recognizer:
-    def __init__(self, engine, emit, quiet=True, interval=1.5, segmentation='balanced',agc=None,gain_provider=None):
+    def __init__(self, engine, emit, quiet=True, interval=1.5, segmentation='balanced',agc=None,gain_provider=None,progressive=False):
         self.engine = engine
+        from progressive_captions import StablePrefix
+        self.prefix=StablePrefix() if progressive else None
         self.agc=DynamicGain(agc)
         self.gain_provider=gain_provider
         self._last_config=agc
@@ -246,6 +248,10 @@ class Recognizer:
         events = self.segmenter.update(new,hypothesis,self.clock/16000,uncertain=self.timeline.last_forced,
             final=stop,acoustic_end=final,idle=(self.clock-self.last_voice_clock)/16000,pauses=self.pauses)
         for event in events:self.emit('committed',event)
+        if self.prefix and self.segmenter.words and not stop:
+            value=self.prefix.offer(self.segmenter.text,self.segmenter.sequence,self.clock/16000,
+                self.segmenter.words[0].stamp,'English')
+            if value:self.emit('provisional',value)
         self.preview(preview)
         if not reusable:
             self.emit('metrics', {'infer_ms': result['infer_ms'], 'audio_seconds': len(self.audio)/16000,

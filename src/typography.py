@@ -82,6 +82,7 @@ def render_captions(browser,rows,colors,settings):
         seconds=max(0,row['start_ms']//1000)
         stamp=f'{seconds//60:02d}:{seconds%60:02d}'
         if row.get('timing')=='approximate':stamp='≈ '+stamp
+        if row.get('provisional'):stamp+=' · 临时译文 · 等待整句' if row['zh'] else ' · 长句预译'
         block(stamp,colors['subtitle_meta'],meta_font,bottom=t['meta_gap'])
         if row['uncertain']:
             char=QTextCharFormat();char.setFont(meta_font);char.setForeground(QColor(colors['warning']))

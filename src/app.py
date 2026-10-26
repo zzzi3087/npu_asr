@@ -26,6 +26,7 @@ from app_paths import RESOURCE_DIR
 from caption_visibility import caption_visibility
 from tray_controller import TrayController
 from file_queue import FileQueue,LABELS as FILE_LABELS
+from progressive_captions import DraftCaptions
 from PySide6.QtGui import QIcon
 
 from theme import STYLE,apply_theme,normalize_colors,effective_colors,normalize_theme
@@ -68,6 +69,7 @@ class Window(QMainWindow):
         self.autostart=autostart
         self.active_jobs=set()
         self.translation_sessions={}
+        self.drafts=DraftCaptions()
         self.history_rows={}
         self.history_menu_sid=None
         self.source_choices={self.settings['audio_source']['kind']:dict(self.settings['audio_source'])}
@@ -449,7 +451,9 @@ class Window(QMainWindow):
         if not self.desktop.options['enabled']:return
         sid=self.current_session if self.capturing else self.view_session
         rows=self.history.rows(sid,self.desktop.options['sentence_count']) if sid else []
-        self.desktop.set_pairs([(row['en'],row['zh']) for row in rows])
+        rows=self.drafts.rows(sid,rows)[-self.desktop.options['sentence_count']:]
+        self.desktop.set_pairs([(row['en']+(' …' if row.get('provisional') else ''),
+            row['zh']+(' …' if row.get('provisional') and row['zh'] else '')) for row in rows])
         self.refresh_desktop_partial()
 
     def refresh_desktop_partial(self):
@@ -660,6 +664,7 @@ class Window(QMainWindow):
         self.render()
         self.worker.commands.put(('start',{'audio_source':dict(self.settings['audio_source']),'quiet':self.settings['quiet'],
             'interval':self.settings['interval'],'segmentation':self.settings.get('segmentation','balanced'),
+            'progressive_translation':self.settings['translate'] and self.settings.get('progressive_translation',True),
             'asr_model':self.settings['asr_model'],'source_language':self.settings['source_language'],
             'feature_backend':self.settings.get('feature_backend','numpy'),'domain_bias':self.settings.get('domain_bias')}))
 
@@ -713,11 +718,18 @@ class Window(QMainWindow):
             self.last_partial=value['text']
             self.update_partial()
             self.refresh_desktop_partial()
+        elif kind=='provisional':
+            self.offer_draft(value)
         elif kind=='committed':
             if not self.current_session:return
-            self.history.add(self.current_session,value['text'],value.get('audio_start_ms',0),value.get('audio_end_ms',1000),
+            ident=self.history.add(self.current_session,value['text'],value.get('audio_start_ms',0),value.get('audio_end_ms',1000),
                 'queued' if self.settings['translate'] else 'disabled',value.get('uncertain',False),
                 metadata=dict(value,target_language=self.settings.get('target_language','简体中文')))
+            draft=self.drafts.link(self.current_session,value.get('sentence_id'),ident,value['text'])
+            if draft:
+                cancelled=self.translator.cancel_queued(segment=draft['id'])
+                if (cancelled and not draft['zh']) or not self.settings['translate']:
+                    self.drafts.finish(ident)
             self.pump(self.current_session)
             self.refresh_sessions()
             self.render()
@@ -727,6 +739,7 @@ class Window(QMainWindow):
             self.diagnostics.setToolTip(self.diagnostics.text())
         elif kind=='stopped':
             self.capturing=False
+            self.drafts.entries={k:r for k,r in self.drafts.entries.items() if k[0]!=self.current_session or r['final_id']}
             self.refresh_source_summary()
             self.history.finish(self.current_session)
             self.start.setEnabled(self.ready and not self.closing)
@@ -775,6 +788,24 @@ class Window(QMainWindow):
         char=QTextCharFormat();char.setFont(make_font(t,'preview',t['preview_size']));char.setForeground(QColor(self.colors['preview_text']))
         cursor.mergeCharFormat(char)
 
+    def offer_draft(self,value):
+        # Optional work never queues behind full sentences, and never retries.
+        if (not self.capturing or not self.current_session or not self.settings['translate']
+                or not self.settings.get('progressive_translation',True) or self.translation_available is False
+                or self.active_jobs or not self.translator.jobs.empty()):return
+        try:
+            profile=dict(self.profile(),source_language=value.get('source_language','auto'),
+                target_language=self.settings.get('target_language','简体中文'),_provisional=True)
+            validate_profile(profile);key=get_key(profile)
+        except Exception:return
+        row=self.drafts.add(self.current_session,value)
+        if not row:return
+        context=[r['en'] for r in self.history.rows(self.current_session,2)]
+        try:self.translator.enqueue(self.current_session,row['id'],row['en'],context,profile,key)
+        except queue.Full:
+            self.drafts.remove_request(row['id']);return
+        self.render()
+
     def pump(self,sid):
         if self.closing or not self.settings['translate']:return
         queued=self.history.queued(sid,limit=32)
@@ -812,6 +843,12 @@ class Window(QMainWindow):
             if self.dialog and self.dialog.isVisible():self.dialog.test_result(text,success)
             else:self.notify(('连接正常 · ' if success else '连接失败 · ')+text)
             return
+        if ident.startswith('draft:'):
+            if self.drafts.translated(ident,text,success):
+                self.set_translation_status(success,'' if success else text)
+                self.refresh_desktop()
+                if sid==self.view_session:self.render()
+            return
         self.active_jobs.discard(ident)
         if not self.history.segment(ident):
             # A deleted session must not strand other work behind a formerly full queue.
@@ -820,6 +857,7 @@ class Window(QMainWindow):
             self.pump_waiting()
             return
         self.history.update(ident,'done' if success else 'failed',text if success else '', '' if success else text)
+        if success:self.drafts.finish(ident)
         self.set_translation_status(success,'' if success else text)
         self.pump(sid)
         if self.current_session and self.current_session!=sid:self.pump(self.current_session)
@@ -862,6 +900,7 @@ class Window(QMainWindow):
         if self.worker:self.dialog.gain_preview.connect(self.worker.update_gain)
         if self.dialog.exec()==SettingsDialog.DialogCode.Accepted:
             self.settings=self.dialog.settings
+            self.drafts.entries.clear()
             self.set_translation_status(None)
             if self.worker:self.worker.update_gain(self.settings.get('agc'))
             affected=set()
@@ -912,6 +951,7 @@ class Window(QMainWindow):
         if answer!=QMessageBox.StandardButton.Yes:return
         for _,ident,*_ in self.translator.cancel_queued(session=sid):self.active_jobs.discard(ident)
         self.history.delete_session(sid)
+        self.drafts.discard_session(sid)
         self.translation_sessions.pop(sid,None)
         if self.current_session==sid:self.current_session=None
         if self.view_session==sid:
@@ -980,10 +1020,11 @@ class Window(QMainWindow):
         count=self.history.db.execute('SELECT COUNT(*) FROM segments WHERE session_id=?',(sid,)).fetchone()[0]
         self.segment_count.setText(f'{count} 段 · 自动保存')
         self.more_rows.setVisible(count>len(rows))
+        rows=self.drafts.rows(sid,rows)
         bar=self.browser.verticalScrollBar()
         position=bar.value()
         follow=position>=bar.maximum()-30
-        key=(sid,tuple(tuple(row.get(k) for k in ('id','en','zh','start_ms','uncertain','timing','status','error')) for row in rows),
+        key=(sid,tuple(tuple(row.get(k) for k in ('id','en','zh','start_ms','uncertain','timing','status','error','provisional')) for row in rows),
             tuple(sorted(c.items())),repr(self.appearance),caption_visibility(self.settings))
         if key!=self._caption_key:
             self._caption_key=key

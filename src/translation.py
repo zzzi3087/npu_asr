@@ -118,13 +118,13 @@ class Translator(QThread):
         try:self.jobs.put_nowait(None)
         except queue.Full:pass
 
-    def cancel_queued(self,session=None):
+    def cancel_queued(self,session=None,segment=None):
         canceled=[]
         # Filter under the queue lock so other sessions retain their exact order.
         with self.jobs.mutex:
             retained=[]
             for item in self.jobs.queue:
-                if item is not None and (session is None or item[0]==session):canceled.append(item)
+                if item is not None and (session is None or item[0]==session) and (segment is None or item[1]==segment):canceled.append(item)
                 else:retained.append(item)
             self.jobs.queue.clear();self.jobs.queue.extend(retained)
             self.jobs.unfinished_tasks-=len(canceled)
@@ -144,11 +144,13 @@ class Translator(QThread):
                 except Exception:
                     self.result.emit(sid,segment,'接口设置不完整，请检查设置中的地址、模型和参数',False)
                     continue
-                for attempt in range(3):
+                attempts=1 if profile.get('_provisional') else 3
+                for attempt in range(attempts):
                     if self.shutdown.is_set():
                         break
                     try:
-                        response = client.post(url,headers=headers,json=body,timeout=(8,20),allow_redirects=False)
+                        response = client.post(url,headers=headers,json=body,
+                            timeout=(3,5) if profile.get('_provisional') else (8,20),allow_redirects=False)
                         if response.status_code!=200:
                             descriptions = {400:'请求参数或模型不兼容',401:'密钥无效或缺失',402:'账户余额不足',
                                 403:'没有模型权限',404:'地址或模型不存在',429:'请求受到限流',529:'服务繁忙'}
@@ -163,6 +165,6 @@ class Translator(QThread):
                     except (ValueError,KeyError,TypeError,IndexError):
                         error = '响应格式不兼容或没有文本，请检查接口格式和模型'
                         break
-                    if attempt<2:
+                    if attempt<attempts-1:
                         self.shutdown.wait(attempt+1)
                 self.result.emit(sid,segment,translated or error,bool(translated))

@@ -189,7 +189,8 @@ class AudioWorker(QThread):
             from qwen_streaming import QwenRecognizer
             cls=QwenRecognizer
         recognizer = cls(self.engine, self.emit, quiet=options['quiet'], interval=options['interval'],
-            segmentation=options.get('segmentation','balanced'),agc=self.live_gain,gain_provider=lambda:self.live_gain)
+            segmentation=options.get('segmentation','balanced'),agc=self.live_gain,gain_provider=lambda:self.live_gain,
+            progressive=options.get('progressive_translation',True))
         remainder = np.zeros(0, np.float32)
         last_meter = 0
         with capture_source(source,callback) as stream:

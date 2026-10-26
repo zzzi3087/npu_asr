@@ -40,6 +40,7 @@ class SentenceAssembler:
         self.mode=MODES.get(mode,MODES['balanced'])
         self.words=[];self.hypothesis=Hypothesis();self.previous=Hypothesis()
         self.next_check=float('inf');self._text='';self.scans=0
+        self.sequence=0
 
     def update(self,new,hypothesis,now,uncertain=False,final=False,acoustic_end=False,idle=0.,pauses=()):
         if not new and hypothesis is None and not final and now<self.next_check:return []
@@ -63,7 +64,8 @@ class SentenceAssembler:
             if self.words:end=min(end,self.words[0].stamp)
             results.append({'text':' '.join(w.text for w in chosen),'audio_start_ms':start,
                 'audio_end_ms':max(start+1,int(end*1000)),
-                'uncertain':any(w.uncertain for w in chosen) or reason=='limit','boundary_reason':reason})
+                'uncertain':any(w.uncertain for w in chosen) or reason=='limit','boundary_reason':reason,'sentence_id':self.sequence})
+            self.sequence+=1
         self._text=' '.join(w.text for w in self.words)
         if self.words:
             wait=self.mode['idle'] if complete_text(self._text) else self.mode['incomplete']
@@ -143,6 +145,7 @@ class TextAssembler:
         self.mode=MODES.get(mode,MODES['balanced']);self.text='';self.start=0.;self.end=0.
         self.language=None;self.next_check=float('inf')
         self.window_tail=False
+        self.sequence=0
 
     def update(self,text='',start=0.,end=0.,now=0.,idle=0.,final=False,language='auto',window_limit=False):
         output=[]
@@ -185,6 +188,7 @@ class TextAssembler:
         return output
 
     def event(self,text,start,end,reason):
+        sequence=self.sequence;self.sequence+=1
         return {'text':text,'audio_start_ms':int(start*1000),'audio_end_ms':max(int(start*1000)+1,int(end*1000)),
             'approximate_timestamps':True,'source_language':self.language or 'auto',
-            'boundary_reason':reason,'uncertain':reason=='limit'}
+            'boundary_reason':reason,'uncertain':reason=='limit','sentence_id':sequence}

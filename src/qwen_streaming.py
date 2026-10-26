@@ -9,8 +9,10 @@ from text_agreement import TextAgreement
 
 
 class QwenRecognizer:
-    def __init__(self,engine,emit,quiet=True,interval=1.5,segmentation='balanced',agc=None,gain_provider=None):
+    def __init__(self,engine,emit,quiet=True,interval=1.5,segmentation='balanced',agc=None,gain_provider=None,progressive=False):
         self.engine=engine;self.emit=emit;self.quiet=quiet;self.vad=Vad()
+        from progressive_captions import StablePrefix
+        self.prefix=StablePrefix() if progressive else None
         self.agc=DynamicGain(agc);self.gain_provider=gain_provider;self._last_config=agc
         self.clock=0;self.base=0;self.size=0;self.active=False;self.silence=0;self.speech_run=0
         self.pre=deque(maxlen=16);self.storage=np.empty(engine.max_samples+160000,np.float32)
@@ -74,6 +76,11 @@ class QwenRecognizer:
                     idle=self.silence/16000,final=stop,language=result.get('language','auto'),
                     window_limit=final and not stop and self.silence<self.silence_limit):
                 self.emit('committed',dict(event,asr_model=self.engine.model_id))
+        if self.prefix and not stop:
+            start=self.segmenter.start if self.segmenter.text else max(self.text_end,self.base/16000)
+            value=self.prefix.offer(join_text(self.segmenter.text,preview),self.segmenter.sequence,
+                self.clock/16000,start,result.get('language','auto'))
+            if value:self.emit('provisional',value)
         self.preview(preview)
         if final:self.reset()
     def preview(self,text):

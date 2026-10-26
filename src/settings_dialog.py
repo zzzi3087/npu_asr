@@ -129,6 +129,10 @@ class SettingsDialog(QDialog):
         self.enabled.setText('启用云端字幕翻译')
         self.enabled.setChecked(settings['translate'])
         form.insertRow(0,self.enabled)
+        self.progressive=QCheckBox('长句先译 · 整句完成后替换')
+        self.progressive.setChecked(settings.get('progressive_translation',True))
+        self.progressive.setToolTip('实时收音的长句说到约 6 秒且前缀稳定后，提前翻译一部分；每句最多增加一次请求。整句译文成功后替换，失败时保留临时译文。下次收音生效。')
+        form.insertRow(1,self.progressive)
         self.test = QPushButton('测试连接')
         self.test.clicked.connect(self.test_connection)
         self.test_status = QLabel('密钥只保存到 Windows 凭据管理器。更换域名不会沿用旧密钥。')
@@ -405,6 +409,7 @@ class SettingsDialog(QDialog):
         result['desktop_captions']=self.desktop_editor.values()
         result['audio_source']=self.audio_source_editor.values()
         result.update(selected_profile=self.current['id'],translate=self.enabled.isChecked(),
+            progressive_translation=self.progressive.isChecked(),
             close_to_tray=self.close_to_tray.isChecked(),minimize_to_tray=self.minimize_to_tray.isChecked(),
             opacity=self.opacity.value(),topmost=self.topmost.isChecked(),quiet=self.quiet.isChecked(),
             interval=self.interval.currentData(),segmentation=self.segmentation.currentData(),
@@ -428,6 +433,7 @@ class SettingsDialog(QDialog):
         self.profile.setCurrentIndex(self.profile.findData(settings['selected_profile']));self.profile.blockSignals(False)
         self.switch_profile()
         self.enabled.setChecked(settings['translate']);self.opacity.setValue(settings['opacity'])
+        self.progressive.setChecked(settings.get('progressive_translation',True))
         self.topmost.setChecked(settings['topmost']);self.quiet.setChecked(settings['quiet'])
         self.close_to_tray.setChecked(settings.get('close_to_tray',True));self.minimize_to_tray.setChecked(settings.get('minimize_to_tray',True))
         self.interval.setCurrentIndex(max(0,self.interval.findData(settings['interval'])))

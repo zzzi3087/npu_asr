@@ -28,6 +28,14 @@ def main():
         agreement=TextAgreement();agreement.update('The sample is ready. We continue')
         assert agreement.update('The sample is ready. We continue today.')[0]=='The sample is ready.'
         result['incremental_sentence_segmentation']=True
+        from progressive_captions import StablePrefix,DraftCaptions
+        prefix=StablePrefix()
+        source='The detector measures many different particles during each experiment and the scientists compare these observations against detailed predictions from several independent theoretical calculations'
+        prefix.offer(source,0,3,0);draft=prefix.offer(source,0,6,0)
+        assert draft and prefix.offer(source,0,7,0) is None
+        drafts=DraftCaptions();row=drafts.add('fixture',draft);drafts.link('fixture',0,'final',source)
+        drafts.translated(row['id'],'临时译文',True);drafts.finish('final');assert not drafts.entries
+        result['progressive_caption_replacement']=True
         result['catalog_loaded']=set(model_manager.catalog())=={'parakeet','qwen3-asr-1.7b','mega-asr','silero-vad'}
         result['model_files_bundled']=[str(p.relative_to(RESOURCE_DIR)) for p in RESOURCE_DIR.rglob('*') if p.is_file() and p.suffix.lower() in {'.onnx','.bin','.npy','.npz','.model','.safetensors','.pt','.pth'}]
         assert not result['model_files_bundled'],result['model_files_bundled']
