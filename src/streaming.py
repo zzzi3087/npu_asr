@@ -4,9 +4,9 @@ from collections import deque
 from pathlib import Path
 import numpy as np
 import onnxruntime as ort
-from segmentation import SentenceAssembler,endpoint_samples
-from text_rules import normalized,terminal,complete_text,SMALL_NUMBERS,TENS
-from audio_gain import DynamicGain
+from segmentation import SentenceAssembler,endpoint_samples,confirmation_wait as normalize_confirmation_wait
+from text_rules import normalized,terminal,complete_text,sentence_boundary,rule_language,SMALL_NUMBERS,TENS
+from audio_gain import DynamicGain,quiet_gain
 from model_manager import model_file
 
 
@@ -53,15 +53,6 @@ def number_groups(words):
     return grouped
 
 
-def quiet_gain(audio, maximum=32., target=.025):
-    """One bounded linear gain; preserve SNR and avoid clipping/noise gating."""
-    rms = float(np.sqrt(np.mean(audio * audio)))
-    peak = float(np.max(np.abs(audio)))
-    if rms < 1e-9:
-        return 1.
-    return max(1., min(maximum, target / rms, .9 / max(peak, 1e-9)))
-
-
 def timed_hypothesis(result,base):
     words=result['words']
     # Group by position, not timestamp: TDT can emit several words at one frame.
@@ -77,8 +68,9 @@ def timed_hypothesis(result,base):
 
 
 class Timeline:
-    def __init__(self):
+    def __init__(self,max_wait=6.):
         self.confirmed = []
+        self.max_wait=normalize_confirmation_wait(max_wait)
         self.previous = []
         self.last_forced = False
 
@@ -113,7 +105,49 @@ class Timeline:
             cost = row
         return first + min(range(len(cost)), key=lambda j: (cost[j],-j))
 
-    def update(self, words, start, end, final=False):
+    @staticmethod
+    def close_prefix(current,previous,budget):
+        """Banded timed edit check; at most two revisions, never a fuzzy suffix."""
+        if abs(len(current)-len(previous))>budget:return False
+        limit=budget+1;row=[min(j,limit) for j in range(len(previous)+1)]
+        for i,(word,stamp) in enumerate(current,1):
+            next_row=[limit]*(len(previous)+1);next_row[0]=min(i,limit)
+            for j in range(max(1,i-budget),min(len(previous),i+budget)+1):
+                old,old_stamp=previous[j-1]
+                cost=0 if word==old and abs(stamp-old_stamp)<=.45 else 1
+                next_row[j]=min(row[j]+1,next_row[j-1]+1,row[j-1]+cost,limit)
+            row=next_row
+            if min(row)>budget:return False
+        return row[-1]<=budget
+
+    def sentence_prefix(self,current,previous,end,stable,language):
+        """Do not let one revised word hold a whole otherwise stable sentence.
+
+        Require a real sentence boundary, three unchanged tail words, repeated
+        punctuation or two unchanged following words, and >= 5/6 agreement.
+        Only existing hypotheses are inspected; no additional ASR invocation.
+        """
+        if len(current)<8 or len(previous)<7:return stable
+        keys=[(normalized(w),t) for w,t in current[:82]]
+        old_keys=[(normalized(w),t) for w,t in previous[:84]]
+        guards=rule_language(' '.join(w for w,_ in current),language)
+        for index in range(max(5,stable),min(80,len(current)-2)):
+            word,stamp=current[index]
+            if stamp>end-.45 or not terminal(word,current[index+1][0],guards):continue
+            old=next((j for j in range(max(2,index-2),min(len(previous)-2,index+3))
+                if old_keys[j][0]==keys[index][0] and abs(old_keys[j][1]-stamp)<=.45),None)
+            if old is None:continue
+            same=lambda a,b: a[0]==b[0] and abs(a[1]-b[1])<=.45
+            if not all(same(a,b) for a,b in zip(keys[index-2:index+1],old_keys[old-2:old+1])):continue
+            tail_stable=all(same(a,b) for a,b in zip(keys[index+1:index+3],old_keys[old+1:old+3]))
+            if terminal(previous[old][0],language=guards)!=terminal(word,language=guards) and not tail_stable:continue
+            prefix=' '.join(w for w,_ in current[:index+1]);right=' '.join(w for w,_ in current[index+1:index+9])
+            if not sentence_boundary(prefix,right,guards):continue
+            budget=min(2,(index+1)//6)
+            if self.close_prefix(keys[:index+1],old_keys[:old+1],budget):return index+1
+        return stable
+
+    def update(self, words, start, end, final=False,language='English'):
         current = [(word, start + stamp) for word, stamp in number_groups(words)]
         remaining = current[self.cut(current):]
         stable = 0
@@ -127,8 +161,11 @@ class Timeline:
                     break
                 stable += 1
             stable = min(stable, max(0, len(remaining)-1))
-            if remaining and remaining[0][1] < end-6.:
-                deadline = sum(stamp <= end-4. for _,stamp in remaining)
+            sentence=self.sentence_prefix(remaining,previous,end,stable,language)
+            if sentence>stable:
+                stable=sentence;self.last_forced=True
+            if remaining and remaining[0][1] < end-self.max_wait:
+                deadline = sum(stamp <= end-self.max_wait*2/3 for _,stamp in remaining)
                 if deadline > stable:
                     stable = deadline
                     self.last_forced = True
@@ -140,10 +177,10 @@ class Timeline:
 
 
 class Recognizer:
-    def __init__(self, engine, emit, quiet=True, interval=1.5, segmentation='balanced',agc=None,gain_provider=None,progressive=False):
+    def __init__(self, engine, emit, quiet=True, interval=1.5, segmentation='balanced',agc=None,gain_provider=None,progressive=False,progressive_limit=2,progressive_interval=1.,confirmation_wait=6.):
         self.engine = engine
         from progressive_captions import StablePrefix
-        self.prefix=StablePrefix() if progressive else None
+        self.prefix=StablePrefix(progressive_limit,progressive_interval) if progressive else None
         self.agc=DynamicGain(agc)
         self.gain_provider=gain_provider
         self._last_config=agc
@@ -166,8 +203,9 @@ class Recognizer:
         self.active = False
         self.silence = 0
         self.last_infer = 0
-        self.timeline = Timeline()
-        self.segmenter = SentenceAssembler(segmentation,language=getattr(engine,'language','English'))
+        self.confirmation_wait=normalize_confirmation_wait(confirmation_wait)
+        self.timeline = Timeline(self.confirmation_wait)
+        self.segmenter = SentenceAssembler(segmentation,language=getattr(engine,'language','English'),max_wait=self.confirmation_wait)
         self.pauses = deque(maxlen=128)
         self.pause_start = None
         self.last_voice_clock = 0
@@ -275,7 +313,8 @@ class Recognizer:
                 self.stable_voice=self.last_voice_clock
         self.latest=result
         self.last_infer = self.clock
-        new, preview = self.timeline.update(result['words'], self.base/16000, self.clock/16000, final)
+        new, preview = self.timeline.update(result['words'], self.base/16000, self.clock/16000, final,
+            language=getattr(self.engine,'language','English'))
         hypothesis,ends=timed_hypothesis(result,self.base/16000)
         events = self.segmenter.update(new,hypothesis,self.clock/16000,uncertain=self.timeline.last_forced,
             final=stop,acoustic_end=final,idle=(self.clock-self.last_voice_clock)/16000,pauses=self.pauses,ends=ends)
@@ -315,4 +354,4 @@ class Recognizer:
         self.silence = 0
         self.latest=None
         self.stable_voice=-1
-        self.timeline = Timeline()
+        self.timeline = Timeline(self.confirmation_wait)

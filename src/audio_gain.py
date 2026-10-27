@@ -1,9 +1,19 @@
 """Speech-aware live gain with bounded amplification, slew and peak protection."""
 import math
 import numpy as np
+from native_audio import LIBRARY,NativeGain,native_quiet_gain
 
 DEFAULT_AGC={'enabled':True,'target_db':-26.,'max_gain_db':36.,'manual_db':0.,'ceiling_db':-1.}
 MINIMUM_GAIN=10**(-24/20)
+
+
+def quiet_gain(audio,maximum=32.,target=.025):
+    """One bounded linear gain for VAD; no noise gate or separate model."""
+    if not audio.size:return 1.
+    if LIBRARY is not None and audio.dtype==np.float32 and audio.flags.c_contiguous and 0<audio.size<=16384:
+        return native_quiet_gain(audio,maximum,target)
+    rms=float(np.sqrt(np.mean(audio*audio)));peak=float(np.max(np.abs(audio)))
+    return 1. if rms<1e-9 else max(1.,min(maximum,target/rms,.9/max(peak,1e-9)))
 
 def normalize_agc(value=None):
     result=dict(DEFAULT_AGC)
@@ -16,7 +26,9 @@ def normalize_agc(value=None):
 
 
 class DynamicGain:
-    def __init__(self,settings=None):
+    def __init__(self,settings=None,*,native=True):
+        self._native=NativeGain() if native and LIBRARY is not None else None
+        self.backend='native' if self._native else 'numpy'
         self.gain=1.;self.input_db=-120.;self.output_db=-120.;self.limited=False
         self._block_size=0;self.configure(settings)
     def configure(self,settings):
@@ -24,10 +36,16 @@ class DynamicGain:
         p=self.settings
         self.manual=10**(p['manual_db']/20);self.maximum=10**(p['max_gain_db']/20)
         self.target=10**(p['target_db']/20);self.ceiling=10**(p['ceiling_db']/20)
+        if self._native:self._native.configure(p['enabled'],self.manual,self.maximum,self.target,self.ceiling)
     def process(self,block,speech=True):
         p=self.settings;block=np.asarray(block,dtype=np.float32)
         size=block.size
         if not size:return block.copy()
+        if self._native and block.flags.c_contiguous and size<=16384:
+            self._native.state.gain=self.gain
+            output=self._native.process(block,speech);state=self._native.state
+            self.gain=state.gain;self.input_db=state.input_db;self.output_db=state.output_db;self.limited=bool(state.limited)
+            return output
         if size!=self._block_size:
             # Capture uses 512-sample blocks. Rebuild only for a changed size.
             self._block_size=size;self._ramp=np.linspace(0,1,size,dtype=np.float32)

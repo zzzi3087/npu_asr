@@ -664,7 +664,10 @@ class Window(QMainWindow):
         self.render()
         self.worker.commands.put(('start',{'audio_source':dict(self.settings['audio_source']),'quiet':self.settings['quiet'],
             'interval':self.settings['interval'],'segmentation':self.settings.get('segmentation','balanced'),
+            'confirmation_wait':self.settings.get('confirmation_wait',3.),
             'progressive_translation':self.settings['translate'] and self.settings.get('progressive_translation',True),
+            'progressive_translation_limit':self.settings.get('progressive_translation_limit',2),
+            'progressive_translation_interval':self.settings.get('progressive_translation_interval',1.),
             'asr_model':self.settings['asr_model'],'source_language':self.settings['source_language'],
             'feature_backend':self.settings.get('feature_backend','numpy'),'domain_bias':self.settings.get('domain_bias')}))
 
@@ -728,8 +731,8 @@ class Window(QMainWindow):
             draft=self.drafts.link(self.current_session,value.get('sentence_id'),ident,value['text'])
             if draft:
                 cancelled=self.translator.cancel_queued(segment=draft['id'])
-                if (cancelled and not draft['zh']) or not self.settings['translate']:
-                    self.drafts.finish(ident)
+                if cancelled:self.drafts.translated(draft['id'],'',False)
+                if not self.settings['translate']:self.drafts.finish(ident)
             self.pump(self.current_session)
             self.refresh_sessions()
             self.render()
@@ -801,9 +804,9 @@ class Window(QMainWindow):
         row=self.drafts.add(self.current_session,value)
         if not row:return
         context=[r['en'] for r in self.history.rows(self.current_session,2)]
-        try:self.translator.enqueue(self.current_session,row['id'],row['en'],context,profile,key)
+        try:self.translator.enqueue(self.current_session,row['id'],row.get('pending_text',row['en']),context,profile,key)
         except queue.Full:
-            self.drafts.remove_request(row['id']);return
+            self.drafts.translated(row['id'],'',False);return
         self.render()
 
     def pump(self,sid):

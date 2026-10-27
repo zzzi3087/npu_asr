@@ -191,9 +191,12 @@ class AudioWorker(QThread):
         if getattr(self.engine,'streaming_mode','')=='utterance':
             from qwen_streaming import QwenRecognizer
             cls=QwenRecognizer
+        confirmation={'confirmation_wait':options.get('confirmation_wait',3.)} if cls is Recognizer else {}
         recognizer = cls(self.engine, self.emit, quiet=options['quiet'], interval=options['interval'],
             segmentation=options.get('segmentation','balanced'),agc=self.live_gain,gain_provider=lambda:self.live_gain,
-            progressive=options.get('progressive_translation',True))
+            progressive=options.get('progressive_translation',True),
+            progressive_limit=options.get('progressive_translation_limit',2),
+            progressive_interval=options.get('progressive_translation_interval',1.),**confirmation)
         remainder = np.zeros(0, np.float32)
         last_meter = 0
         with capture_source(source,callback) as stream:

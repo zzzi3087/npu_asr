@@ -131,8 +131,21 @@ class SettingsDialog(QDialog):
         form.insertRow(0,self.enabled)
         self.progressive=QCheckBox('长句先译 · 整句完成后替换')
         self.progressive.setChecked(settings.get('progressive_translation',True))
-        self.progressive.setToolTip('实时收音的长句说到约 6 秒且前缀稳定后，提前翻译一部分；每句最多增加一次请求。整句译文成功后替换，失败时保留临时译文。下次收音生效。')
+        self.progressive.setToolTip('实时收音约 6 秒且前缀稳定后提前翻译。后续预译需有更多稳定文字，最短间隔可调整。整句译文成功后替换；次数是上限，不保证用满。下次收音生效。')
         form.insertRow(1,self.progressive)
+        self.progressive_limit=QSpinBox();self.progressive_limit.setRange(1,10)
+        self.progressive_limit.setValue(settings.get('progressive_translation_limit',2));self.progressive_limit.setSuffix(' 次')
+        self.progressive_limit.setEnabled(self.progressive.isChecked())
+        self.progressive.toggled.connect(self.progressive_limit.setEnabled)
+        self.progressive_limit.setToolTip('每个长句最多额外预译的次数，默认 2 次；整句确认后的翻译不计入。提高次数会增加翻译 API 请求。')
+        form.insertRow(2,'每句最多预译',self.progressive_limit)
+        self.progressive_interval=QDoubleSpinBox();self.progressive_interval.setRange(.5,5.)
+        self.progressive_interval.setSingleStep(.5);self.progressive_interval.setDecimals(1);self.progressive_interval.setSuffix(' 秒')
+        self.progressive_interval.setValue(settings.get('progressive_translation_interval',1.))
+        self.progressive_interval.setEnabled(self.progressive.isChecked())
+        self.progressive.toggled.connect(self.progressive_interval.setEnabled)
+        self.progressive_interval.setToolTip('默认 1 秒。仅在已有识别结果包含更多稳定文字时触发，不额外运行 ASR；实际间隔还取决于识别更新和翻译服务。')
+        form.insertRow(3,'预译最短间隔',self.progressive_interval)
         self.test = QPushButton('测试连接')
         self.test.clicked.connect(self.test_connection)
         self.test_status = QLabel('密钥只保存到 Windows 凭据管理器。更换域名不会沿用旧密钥。')
@@ -202,6 +215,13 @@ class SettingsDialog(QDialog):
         self.segmentation.setCurrentIndex(max(0,self.segmentation.findData(settings.get('segmentation','balanced'))))
         self.segmentation.setToolTip('完整句子优先提交，未完成短语跨停顿拼接。整句优先保留更长上下文；低延迟更早确认停顿。保存后下次收音生效。')
         appearance.addRow('分句策略',self.segmentation)
+        self.confirmation_wait=QDoubleSpinBox();self.confirmation_wait.setRange(.5,6.)
+        self.confirmation_wait.setSingleStep(.5);self.confirmation_wait.setDecimals(1);self.confirmation_wait.setSuffix(' 秒')
+        self.confirmation_wait.setValue(settings.get('confirmation_wait',3.))
+        self.confirmation_wait.setEnabled(self.asr_model.currentData() in PARAKEET_MODELS)
+        self.asr_model.currentIndexChanged.connect(lambda:self.confirmation_wait.setEnabled(self.asr_model.currentData() in PARAKEET_MODELS))
+        self.confirmation_wait.setToolTip('仅实时 Parakeet v2/v3：默认 3 秒。稳定句子提前提交；降低会更早采用仍可能修正的词，并标记边界待核。是等待目标，不包含识别刷新、推理和翻译耗时；没有可靠句界时仍会保护未完成短语。保存后下次收音生效。')
+        appearance.addRow('Parakeet 字幕确认等待上限',self.confirmation_wait)
         agc=normalize_agc(settings.get('agc'))
         self.agc_enabled=QCheckBox('自动动态增益');self.agc_enabled.setChecked(agc['enabled'])
         gain_form.addRow(self.agc_enabled)
@@ -412,9 +432,12 @@ class SettingsDialog(QDialog):
         result['audio_source']=self.audio_source_editor.values()
         result.update(selected_profile=self.current['id'],translate=self.enabled.isChecked(),
             progressive_translation=self.progressive.isChecked(),
+            progressive_translation_limit=self.progressive_limit.value(),
+            progressive_translation_interval=self.progressive_interval.value(),
             close_to_tray=self.close_to_tray.isChecked(),minimize_to_tray=self.minimize_to_tray.isChecked(),
             opacity=self.opacity.value(),topmost=self.topmost.isChecked(),quiet=self.quiet.isChecked(),
             interval=self.interval.currentData(),segmentation=self.segmentation.currentData(),
+            confirmation_wait=self.confirmation_wait.value(),
             colors=self.theme_editor.validated_colors(),theme=dict(self.theme_editor.options),
             saved_themes=copy.deepcopy(self.theme_editor.saved_themes))
         return result
@@ -436,10 +459,13 @@ class SettingsDialog(QDialog):
         self.switch_profile()
         self.enabled.setChecked(settings['translate']);self.opacity.setValue(settings['opacity'])
         self.progressive.setChecked(settings.get('progressive_translation',True))
+        self.progressive_limit.setValue(settings.get('progressive_translation_limit',2))
+        self.progressive_interval.setValue(settings.get('progressive_translation_interval',1.))
         self.topmost.setChecked(settings['topmost']);self.quiet.setChecked(settings['quiet'])
         self.close_to_tray.setChecked(settings.get('close_to_tray',True));self.minimize_to_tray.setChecked(settings.get('minimize_to_tray',True))
         self.interval.setCurrentIndex(max(0,self.interval.findData(settings['interval'])))
         self.segmentation.setCurrentIndex(self.segmentation.findData(settings['segmentation']))
+        self.confirmation_wait.setValue(settings.get('confirmation_wait',3.))
         self.asr_model.setCurrentIndex(self.asr_model.findData(settings.get('asr_model','parakeet')))
         self.feature_backend.setCurrentIndex(max(0,self.feature_backend.findData(settings.get('feature_backend','numpy'))))
         self.source_language.setCurrentIndex(self.source_language.findData(settings.get('source_language','auto')))

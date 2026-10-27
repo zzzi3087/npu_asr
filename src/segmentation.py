@@ -1,8 +1,9 @@
 """Incremental sentence decisions, separate from acoustic window boundaries."""
 from dataclasses import dataclass
 import re
+import math
 from text_rules import (plain,normalized,terminal,number_part,complete_text,
-    joins_continuation,sentence_spans,join_text,DANGLING,STARTERS,CLAUSE_STARTERS,CLOSERS)
+    joins_continuation,sentence_spans,sentence_boundary,rule_language,join_text,CLAUSE_STARTERS,CLOSERS)
 
 MODES={
     'balanced':dict(endpoint=.64,idle=1.2,incomplete=2.4,soft=8.,hard=26.,maximum=100),
@@ -13,6 +14,10 @@ MODES={
 
 def endpoint_samples(mode,quiet):
     return int((MODES.get(mode,MODES['balanced'])['endpoint']+(.128 if quiet else 0))*16000)
+
+
+def confirmation_wait(value=3.):
+    return float(value) if type(value) in (int,float) and math.isfinite(value) and .5<=value<=6 else 3.
 
 
 class Hypothesis:
@@ -34,11 +39,13 @@ class Word:
     uncertain:bool=False
     stable_terminal:bool=False
     end:float|None=None
+    stable_context:bool=False
 
 
 class SentenceAssembler:
-    def __init__(self,mode='balanced',language='English'):
+    def __init__(self,mode='balanced',language='English',max_wait=6.):
         self.mode=MODES.get(mode,MODES['balanced'])
+        self.max_wait=confirmation_wait(max_wait)
         self.language=language
         self.words=[];self.hypothesis=Hypothesis();self.previous=Hypothesis()
         self.next_check=float('inf');self._text='';self.scans=0
@@ -53,8 +60,12 @@ class SentenceAssembler:
                 current=self.hypothesis.find(word);old=self.previous.find(word)
                 if current is not None:
                     word.text=self.hypothesis.words[current][0]
-                    mark=terminal(word.text)
-                    word.stable_terminal=bool(mark) and old is not None and mark==terminal(self.previous.words[old][0])
+                    mark=terminal(word.text,language=self.language)
+                    word.stable_terminal=bool(mark) and old is not None and mark==terminal(self.previous.words[old][0],language=self.language)
+                    current_tail=self.hypothesis.words[current+1:current+3]
+                    old_tail=self.previous.words[old+1:old+3] if old is not None else []
+                    word.stable_context=(len(current_tail)==len(old_tail)==2 and
+                        all(normalized(a)==normalized(b) and abs(t-u)<=.5 for (a,t),(b,u) in zip(current_tail,old_tail)))
                     if ends and current<len(ends):word.end=ends[current]
             self.previous=self.hypothesis
         results=[]
@@ -67,7 +78,7 @@ class SentenceAssembler:
             if self.words:end=min(end,self.words[0].stamp)
             results.append({'text':' '.join(w.text for w in chosen),'audio_start_ms':start,
                 'audio_end_ms':max(start+1,int(end*1000)),
-                'uncertain':any(w.uncertain for w in chosen) or reason=='limit','boundary_reason':reason,'sentence_id':self.sequence})
+                'uncertain':any(w.uncertain for w in chosen) or reason in {'limit','confirmation_timeout'},'boundary_reason':reason,'sentence_id':self.sequence})
             self.sequence+=1
         self._text=' '.join(w.text for w in self.words)
         if self.words:
@@ -86,40 +97,46 @@ class SentenceAssembler:
         stamp=self.words[index].stamp
         return max((end-start for start,end in pauses if start>=stamp+.06 and end<=next_stamp+.16),default=0.)
 
-    def safe_cut(self,count):
+    def right_context(self,index):
+        pos=self.hypothesis.find(self.words[index])
+        if pos is not None:return ' '.join(w for w,_ in self.hypothesis.words[pos+1:pos+9])
+        return ' '.join(w.text for w in self.words[index+1:index+9])
+
+    def safe_cut(self,count,language):
         if count<=0 or count>len(self.words):return False
-        left=self.words[count-1].text
-        if plain(left) in DANGLING:return False
-        return count==len(self.words) or not joins_continuation(left,self.words[count].text,self.language)
+        left=' '.join(w.text for w in self.words[:count])
+        return complete_text(left,language) and (count==len(self.words) or not joins_continuation(left,self.right_context(count-1),language))
 
     def boundary(self,now,final,acoustic_end,idle,pauses):
+        text=' '.join(w.text for w in self.words);language=rule_language(text,self.language)
         for index,word in enumerate(self.words):
             next_text,next_stamp=self.lookahead(index)
-            mark=terminal(word.text,next_text)
+            mark=terminal(word.text,next_text,language)
             if not mark:continue
             prefix=' '.join(w.text for w in self.words[:index+1])
-            if not complete_text(prefix,self.language):continue
-            if mark=='.' and next_text:
-                if joins_continuation(word.text,next_text,self.language):continue
-                if next_text[:1].islower() and plain(next_text) not in STARTERS:continue
+            if not sentence_boundary(prefix,self.right_context(index),language):continue
             # In speech require agreement and right context. A genuine acoustic
             # endpoint can confirm a complete sentence in a single pass.
-            supported=final or acoustic_end or word.stable_terminal
+            # Stable following words also establish a boundary when the model
+            # adds punctuation one pass later. No third recognition is needed.
+            supported=final or acoustic_end or word.stable_terminal or (word.stable_context and not word.uncertain)
             if supported and (next_text or acoustic_end or final):return index+1,'sentence'
+            ended=word.end if word.end is not None else word.stamp+.2
+            if now-ended>=self.max_wait and len(self.right_context(index).split())>=2:
+                return index+1,'confirmation_timeout'
         if final:return len(self.words),'stop'
-        text=' '.join(w.text for w in self.words)
-        wait=self.mode['idle'] if complete_text(text,self.language) else self.mode['incomplete']
+        wait=self.mode['idle'] if complete_text(text,language) else self.mode['incomplete']
         if idle>=wait:return len(self.words),'pause'
         age=now-self.words[0].stamp
         hard=age>=self.mode['hard'] or len(self.words)>=self.mode['maximum']
         if not hard and (age<self.mode['soft'] or len(self.words)<14):return 0,''
         candidates=[]
         for count in range(4,len(self.words)):
-            if not self.safe_cut(count):continue
+            if not self.safe_cut(count,language):continue
             last=self.words[count-1].text;following=self.words[count].text
             pause=self.pause_after(count-1,self.words[count].stamp,pauses)
             prefix=' '.join(w.text for w in self.words[:count])
-            if not complete_text(prefix,self.language):continue
+            if not complete_text(prefix,language):continue
             # A comma or elapsed word count alone does not justify a split.
             mark=last.rstrip(CLOSERS)[-1:]
             strong=mark in (';',':') or (mark==',' and (pause>=.35 or plain(following) in CLAUSE_STARTERS))
@@ -129,7 +146,7 @@ class SentenceAssembler:
             # Bounded fallback for pathological unpunctuated streams only.
             # Keep recent context and visibly mark an uncertain boundary.
             for count in range(len(self.words)-4,3,-1):
-                if self.safe_cut(count) and complete_text(' '.join(w.text for w in self.words[:count]),self.language):
+                if self.safe_cut(count,language):
                     return count,'limit'
             if len(self.words)>self.mode['maximum']*2:return len(self.words),'limit'
         return 0,''
@@ -157,22 +174,21 @@ class TextAssembler:
             if self.text and language!=self.language:
                 output.append(self.event(self.text,self.start,self.end,'language'));self.text='';self.window_tail=False
             if not self.text:self.start=start
-            if self.text and self.window_tail and terminal(self.text.split()[-1]):
+            if self.text and self.window_tail and terminal(self.text.split()[-1],language=language):
                 # A decoder may invent a full stop at a capacity cut. This last
                 # phrase was deliberately held. Use the next window's context
                 # to join continuations, preserving genuine complete sentences.
                 right=text.lstrip()
-                continuing=(not complete_text(self.text,language) or joins_continuation(self.text,right,language)
-                    or (right[:1].islower() and plain(right.split()[0]) not in STARTERS))
+                continuing=(not complete_text(self.text,language) or joins_continuation(self.text,right,language))
                 if continuing:self.text=re.sub(r'[.!?。！？]+(?=[\"\'”’）)\]}」』》]*$)','',self.text)
             self.language=language;self.text=join_text(self.text,text.strip());self.end=end
             self.window_tail=False
-            original=self.text;spans=list(sentence_spans(original,language));consumed=0
+            original=self.text;span_language=rule_language(original,language);spans=list(sentence_spans(original,span_language));consumed=0
             for lo,hi in spans:
                 part=original[lo:hi].strip();following=original[hi:].strip()
                 # At capacity, retain the last phrase until new context or a
                 # real endpoint arrives. Window size is not sentence length.
-                if not terminal(part.split()[-1]) or not complete_text(part,language) or (window_limit and not following):break
+                if not sentence_boundary(part,following,span_language) or (window_limit and not following):break
                 finish=self.start+(self.end-self.start)*hi/max(1,len(original))
                 begin=self.start+(self.end-self.start)*lo/max(1,len(original))
                 output.append(self.event(part,begin,finish,'sentence'));consumed=hi

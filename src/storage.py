@@ -14,6 +14,8 @@ from domain_bias import default_domain_bias,normalize_domain_bias
 from desktop_caption_config import default_desktop_captions,normalize_desktop_captions
 from audio_sources import normalize_audio_source
 from caption_visibility import caption_visibility
+from progressive_captions import preview_limit,preview_interval
+from segmentation import confirmation_wait
 
 from app_paths import DATA
 SERVICE = 'ParakeetNPUSubtitles'
@@ -25,11 +27,11 @@ def utc_now():
 
 def default_settings():
     return {'version': 3, 'main_layout_version':2, 'selected_profile': 'deepseek', 'translate': True,
-        'show_source':True,'show_translation':True,'progressive_translation':True,
+        'show_source':True,'show_translation':True,'progressive_translation':True,'progressive_translation_limit':2,'progressive_translation_interval':1.,
         'close_to_tray':True,'minimize_to_tray':True,
         'asr_model':'parakeet','source_language':'auto','target_language':'简体中文','agc':dict(DEFAULT_AGC),'feature_backend':'numpy','domain_bias':default_domain_bias(),'desktop_captions':default_desktop_captions(),
         'english_size': 24, 'chinese_size': 22, 'opacity': 100, 'topmost': False,
-        'quiet': True, 'interval': 1.5, 'segmentation': 'balanced', 'colors':dict(DEFAULT_COLORS),
+        'quiet': True, 'interval': 1.5, 'segmentation': 'balanced', 'confirmation_wait':3.,'colors':dict(DEFAULT_COLORS),
         'theme':normalize_theme(), 'saved_themes':[], 'typography':default_typography(), 'microphone_name': '', 'audio_source':normalize_audio_source(), 'profiles': [
             {'id': 'deepseek', 'name': 'DeepSeek', 'protocol': 'openai',
              'base_url': 'https://api.deepseek.com', 'model': 'deepseek-flash',
@@ -64,6 +66,9 @@ def load_settings(directory=DATA):
     defaults['show_source'],defaults['show_translation']=caption_visibility(defaults)
     for key in ('close_to_tray','minimize_to_tray','progressive_translation'):
         if type(defaults[key]) is not bool:defaults[key]=True
+    defaults['progressive_translation_limit']=preview_limit(defaults.get('progressive_translation_limit'))
+    defaults['progressive_translation_interval']=preview_interval(defaults.get('progressive_translation_interval'))
+    defaults['confirmation_wait']=confirmation_wait(defaults.get('confirmation_wait'))
     return defaults
 
 
@@ -72,6 +77,9 @@ def save_settings(settings, directory=DATA):
     directory.mkdir(parents=True, exist_ok=True)
     # Keys are not accepted by the settings schema; they live in Credential Manager.
     clean = {k: settings.get(k,value) for k,value in default_settings().items()}
+    clean['progressive_translation_limit']=preview_limit(settings.get('progressive_translation_limit'))
+    clean['progressive_translation_interval']=preview_interval(settings.get('progressive_translation_interval'))
+    clean['confirmation_wait']=confirmation_wait(settings.get('confirmation_wait'))
     clean['colors']=normalize_colors(settings.get('colors'))
     clean['theme']=normalize_theme(settings.get('theme'))
     clean['typography']=normalize_typography(settings.get('typography'))

@@ -3,6 +3,8 @@ import os
 from PyInstaller.utils.hooks import collect_all,collect_dynamic_libs,collect_data_files,copy_metadata
 root=Path(SPECPATH).parent
 source=root/'src'
+native_dll=root/'build'/'native'/'audio_native.dll'
+if not native_dll.is_file():raise RuntimeError('Run python tools/build_native.py before packaging')
 ov_data,ov_bins,ov_imports=collect_all('openvino')
 hidden=ov_imports+['keyring.backends.Windows','win32ctypes.pywin32.win32cred','pyaudiowpatch',
     'onnxruntime.capi.onnxruntime_pybind11_state','onnxruntime.capi._pybind_state','tokenizers','sentencepiece']
@@ -16,7 +18,7 @@ if not (media/'bin'/'ffmpeg.exe').is_file() or not (media/'bin'/'ffprobe.exe').i
 data+=[(str(media),'media-tools')]
 weights={'.onnx','.bin','.npy','.npz','.model','.safetensors','.pt','.pth'}
 data=[(source,target) for source,target in data if Path(source).suffix.lower() not in weights]
-a=Analysis([str(source/'frozen_entry.py')],pathex=[str(source)],binaries=ov_bins+collect_dynamic_libs('onnxruntime'),
+a=Analysis([str(source/'frozen_entry.py')],pathex=[str(source)],binaries=ov_bins+collect_dynamic_libs('onnxruntime')+[(str(native_dll),'native')],
     datas=data,hiddenimports=hidden,hookspath=[],runtime_hooks=[str(root/'packaging'/'runtime_hook.py')],
     excludes=['torch','tensorflow','transformers','scipy','pandas','matplotlib','IPython','pytest','PySide6.QtQml','PySide6.QtQuick'],
     noarchive=False,optimize=0)

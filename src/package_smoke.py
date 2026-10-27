@@ -18,6 +18,12 @@ def main():
             test_catalog=json.loads(args.catalog_file.read_text('utf-8'))['models']
             model_manager.catalog=lambda:test_catalog
         result['version']=VERSION
+        from audio_gain import DynamicGain,quiet_gain
+        import numpy as np
+        gain=DynamicGain();sample=np.full(512,.001,np.float32)
+        assert gain.backend=='native'
+        assert np.isfinite(gain.process(sample)).all() and quiet_gain(sample)>1
+        result['native_audio_gain']=True
         from segmentation import TextAssembler,endpoint_samples
         from text_agreement import TextAgreement
         assert .76<endpoint_samples('balanced',True)/16000<.78
@@ -57,6 +63,9 @@ def main():
         from settings_dialog import SettingsDialog
         from PySide6.QtCore import Qt
         dialog=SettingsDialog(w.settings,w)
+        assert dialog.progressive_limit.value()==2 and dialog.progressive_interval.value()==1.
+        assert dialog.confirmation_wait.value()==3.
+        result['configurable_caption_latency_and_previews']=True
         dialog.theme_preview.connect(w.apply_colors)
         dialog.theme_editor.choose_preset('米纸')
         assert len(dialog.theme_editor.cards)==4 and w.colors==PRESETS['米纸']

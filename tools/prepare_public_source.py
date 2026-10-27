@@ -3,8 +3,8 @@ import argparse,json,re,shutil
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 NAMES={'.gitignore','README.md','LICENSE','main.py'}
-DIRECTORIES={'src','tests','tools','packaging','resources','licenses','requirements'}
-EXTENSIONS={'.py','.txt','.json','.md','.spec','.iss','.ico'}
+DIRECTORIES={'src','native','tests','tools','packaging','resources','licenses','requirements'}
+EXTENSIONS={'.py','.cpp','.h','.txt','.json','.md','.spec','.iss','.ico'}
 FORBIDDEN={'.onnx','.bin','.npy','.npz','.model','.safetensors','.pt','.pth','.sqlite','.db','.log','.wav','.mp3','.pem','.key'}
 def check(path):
     data=path.read_bytes()

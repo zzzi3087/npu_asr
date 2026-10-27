@@ -20,6 +20,26 @@ assert p.offer('An entirely revised sentence which has no stable prefix at all',
 p=StablePrefix();chinese='我们通过对多个不同能量区间的实验数据进行详细分析来检验理论模型并比较观测结果'
 p.offer(chinese,0,3,0);assert p.offer(chinese,0,6,0)
 
+# Configurable budgets, one-second default, growth and duplicate suppression.
+for limit in (1,2,3,10):
+    p=StablePrefix(limit);events=[]
+    for step in range(12):
+        text=' '.join('particle'+str(i) for i in range(20+15*step))
+        now=6+1.25*step
+        p.offer(text,0,now-.1,0)
+        event=p.offer(text,0,now,0)
+        if event:events.append(event)
+    assert len(events)==limit,(limit,events)
+    assert len({v['text'] for v in events})==limit
+    assert all(len(a['text'])<len(b['text']) for a,b in zip(events,events[1:]))
+p=StablePrefix(2,.5);seed=' '.join('particle'+str(i) for i in range(20));expanded=seed+' '+' '.join('particle'+str(i) for i in range(20,35))
+p.offer(seed,0,3,0);assert p.offer(seed,0,6,0)
+assert p.offer(expanded,0,6.1,0) is None
+assert p.offer(expanded,0,6.4,0) is None
+assert p.offer(expanded,0,6.5,0)
+assert default_settings()['progressive_translation_limit']==2
+assert default_settings()['progressive_translation_interval']==1.
+
 class Vad:
     def __call__(self,block):return .99
 streaming.Vad=qwen_streaming.Vad=Vad
@@ -64,6 +84,12 @@ try:
     w.on_translation(sid,ident,'探测器测量多种粒子',True);w.render_now();settle()
     assert '探测器测量多种粒子' in w.browser.toPlainText() and '临时译文' in w.browser.toPlainText()
     assert len(w.history.rows(sid))==0 and w.desktop.pairs[-1][1].endswith('…')
+    second=dict(draft,text=' '.join(long.split()[:22]),audio_end_ms=9000)
+    w.on_event('provisional',second);second_job=w.translator.jobs.get_nowait()
+    assert second_job[2]==second['text'] and second_job[1]!=ident and len(w.drafts.entries)==1
+    w.render_now();assert '探测器测量多种粒子' in w.browser.toPlainText()
+    w.on_translation(sid,second_job[1],'optional update failed',False);w.render_now()
+    assert '探测器测量多种粒子' in w.browser.toPlainText()
     w.on_event('committed',dict(text=long,sentence_id=0,audio_start_ms=0,audio_end_ms=10000))
     row=w.history.rows(sid)[0];full_job=w.translator.jobs.get_nowait()
     assert full_job[2]==long and not full_job[4].get('_provisional')
@@ -91,6 +117,22 @@ try:
     assert not w.translator.jobs.get_nowait()[1].startswith('draft:')
     config=root/'settings.json';export_configuration(w.settings,config)
     assert import_configuration(config)['progressive_translation'] is True
+    from settings_dialog import SettingsDialog
+    dialog=SettingsDialog(w.settings,w)
+    assert dialog.progressive_limit.value()==2 and dialog.progressive_interval.value()==1.
+    assert dialog.confirmation_wait.value()==3.
+    dialog.confirmation_wait.setValue(.5)
+    dialog.progressive_limit.setValue(4);dialog.progressive_interval.setValue(.5)
+    settings=dialog.draft();assert settings['progressive_translation_limit']==4 and settings['progressive_translation_interval']==.5
+    dialog.load_draft(settings);assert dialog.progressive_limit.value()==4 and dialog.progressive_interval.value()==.5
+    export_configuration(settings,config);restored=import_configuration(config)
+    assert restored['progressive_translation_limit']==4 and restored['progressive_translation_interval']==.5 and restored['confirmation_wait']==.5
+    dialog.asr_model.setCurrentIndex(dialog.asr_model.findData('qwen3-asr-1.7b'));assert not dialog.confirmation_wait.isEnabled()
+    dialog.asr_model.setCurrentIndex(dialog.asr_model.findData('parakeet-v3'));assert dialog.confirmation_wait.isEnabled()
+    dialog.reject();dialog.deleteLater()
+    for key,value in [('progressive_translation_limit',0),('progressive_translation_limit',2.5),('progressive_translation_limit',True),('progressive_translation_interval',0),('progressive_translation_interval',float('nan')),('confirmation_wait',0),('confirmation_wait',float('inf'))]:
+        try:validate_configuration(dict(w.settings,**{key:value}));raise AssertionError('accepted invalid preview setting')
+        except ValueError:pass
     try:validate_configuration(dict(w.settings,progressive_translation='false'));raise AssertionError('accepted invalid toggle')
     except ValueError:pass
 finally:
@@ -123,7 +165,15 @@ finally:t.stop();assert t.wait(2000);translation.requests.Session=original
 # Revised boundaries and stale/deleted sessions cannot resurrect an old preview.
 d=DraftCaptions();r=d.add('one',draft);d.link('one',0,'final','Short.');assert not d.entries
 r=d.add('one',draft);d.discard_session('one');assert not d.translated(r['id'],'old',True)
-print(json.dumps(dict(all_four_models=True,no_extra_asr_calls=True,one_request_per_long_sentence=True,
+d=DraftCaptions();r=d.add('one',draft);old_id=r['id'];d.translated(old_id,'old',True)
+second=dict(draft,text=long,audio_end_ms=9000);r=d.add('one',second);new_id=r['id']
+assert r['en']==draft['text'] and r['zh']=='old' and len(d.entries)==1
+assert not d.translated(old_id,'late',True)
+assert d.translated(new_id,'new',True) and r['en']==long and r['zh']=='new'
+# A revised final boundary inside a pending longer preview cancels that draft.
+d=DraftCaptions();r=d.add('one',draft);d.translated(r['id'],'old',True);r=d.add('one',second)
+d.link('one',0,'final',draft['text']);assert not d.entries
+print(json.dumps(dict(all_four_models=True,no_extra_asr_calls=True,configurable_preview_limit=True,default_limit=2,default_interval=1,
     stable_prefix_only=True,atomic_full_replacement=True,failed_final_preserves_draft=True,
     no_duplicate_history_or_exports=True,late_results_ignored=True,queue_pressure_skips_drafts=True,
     optional_request_timeout_and_no_retry=True,settings_roundtrip=True)))

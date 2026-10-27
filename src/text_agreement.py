@@ -1,6 +1,6 @@
 """Conservative sentence-prefix confirmation for text-only ASR hypotheses."""
 import re
-from text_rules import normalized,sentence_spans,terminal
+from text_rules import normalized,sentence_spans,terminal,rule_language
 
 UNITS=re.compile(r'[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]|[^\s\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]+')
 
@@ -30,9 +30,10 @@ class TextAgreement:
         old=self.previous[self.offset(self.previous):].strip()
         if final:limit=len(tail)
         else:
-            for lo,hi in sentence_spans(tail,language):
+            guards=rule_language(tail,language)
+            for lo,hi in sentence_spans(tail,guards):
                 part=tail[:hi]
-                if not tail[hi:].strip() or not terminal(part.split()[-1]):break
+                if not tail[hi:].strip() or not terminal(part.split()[-1],language=guards):break
                 if not old.startswith(part):break
                 limit=hi
         self.previous=text

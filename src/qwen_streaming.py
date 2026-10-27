@@ -9,10 +9,10 @@ from text_agreement import TextAgreement
 
 
 class QwenRecognizer:
-    def __init__(self,engine,emit,quiet=True,interval=1.5,segmentation='balanced',agc=None,gain_provider=None,progressive=False):
+    def __init__(self,engine,emit,quiet=True,interval=1.5,segmentation='balanced',agc=None,gain_provider=None,progressive=False,progressive_limit=2,progressive_interval=1.):
         self.engine=engine;self.emit=emit;self.quiet=quiet;self.vad=Vad()
         from progressive_captions import StablePrefix
-        self.prefix=StablePrefix() if progressive else None
+        self.prefix=StablePrefix(progressive_limit,progressive_interval) if progressive else None
         self.agc=DynamicGain(agc);self.gain_provider=gain_provider;self._last_config=agc
         self.clock=0;self.base=0;self.size=0;self.active=False;self.silence=0;self.speech_run=0
         self.pre=deque(maxlen=16);self.storage=np.empty(engine.max_samples+160000,np.float32)

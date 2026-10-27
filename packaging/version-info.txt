@@ -1,5 +1,5 @@
-VSVersionInfo(ffi=FixedFileInfo(filevers=(3,0,0,0),prodvers=(3,0,0,0),mask=0x3f,flags=0,OS=0x40004,fileType=0x1,subtype=0x0,date=(0,0)),
+VSVersionInfo(ffi=FixedFileInfo(filevers=(3,2,0,0),prodvers=(3,2,0,0),mask=0x3f,flags=0,OS=0x40004,fileType=0x1,subtype=0x0,date=(0,0)),
 kids=[StringFileInfo([StringTable('040904b0',[StringStruct('CompanyName','npu_asr contributors'),
-StringStruct('FileDescription','实时字幕 · Intel NPU'),StringStruct('FileVersion','3.0'),
+StringStruct('FileDescription','实时字幕 · Intel NPU'),StringStruct('FileVersion','3.2'),
 StringStruct('InternalName','LiveCaptions'),StringStruct('OriginalFilename','LiveCaptions.exe'),
-StringStruct('ProductName','实时字幕'),StringStruct('ProductVersion','3.0')])]),VarFileInfo([VarStruct('Translation',[1033,1200])])])
+StringStruct('ProductName','实时字幕'),StringStruct('ProductVersion','3.2')])]),VarFileInfo([VarStruct('Translation',[1033,1200])])])

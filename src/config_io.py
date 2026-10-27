@@ -48,6 +48,14 @@ def validate_configuration(value):
     for key in ('translate','topmost','quiet','show_source','show_translation','close_to_tray','minimize_to_tray','progressive_translation'):
         if type(result[key]) is not bool:raise ValueError('布尔参数无效：'+key)
     if result['interval'] not in (1.,1.5,2.):raise ValueError('预览间隔须为 1、1.5 或 2 秒')
+    if type(result['progressive_translation_limit']) is not int or not 1<=result['progressive_translation_limit']<=10:
+        raise ValueError('每句预译次数须为 1–10 的整数')
+    gap=result['progressive_translation_interval']
+    if type(gap) not in (int,float) or not math.isfinite(gap) or not .5<=gap<=5:
+        raise ValueError('预译最短间隔须为 0.5–5 秒')
+    wait=result['confirmation_wait']
+    if type(wait) not in (int,float) or not math.isfinite(wait) or not .5<=wait<=6:
+        raise ValueError('Parakeet 字幕确认等待上限须为 0.5–6 秒')
     if result['segmentation'] not in ('balanced','sentence','fast'):raise ValueError('不支持的分句策略')
     result['typography']=normalize_typography(result['typography'],strict=True)
     if result['asr_model'] not in {ident for _,ident in ASR_MODELS}:raise ValueError('不支持的转录模型')
