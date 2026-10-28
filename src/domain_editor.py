@@ -26,7 +26,7 @@ class DomainEditor(QWidget):
             button=QPushButton(title);button.clicked.connect(method);row.addWidget(button)
             if title=='删除':self.remove_button=button
         root.addLayout(row)
-        form=QFormLayout();form.setVerticalSpacing(10);root.addLayout(form)
+        form=QFormLayout();self.form=form;form.setVerticalSpacing(10);root.addLayout(form)
         self.name=QLineEdit();self.name.setMaxLength(80);form.addRow('领域名称',self.name)
         self.background=QPlainTextEdit();self.background.setFixedHeight(70)
         self.background.setPlaceholderText('简短背景，例如：暗物质直接探测与液氙实验。')
@@ -41,11 +41,21 @@ class DomainEditor(QWidget):
         self.strength=QDoubleSpinBox();self.strength.setRange(0,2);self.strength.setSingleStep(.1);self.strength.setDecimals(1)
         form.addRow('Parakeet 加权强度',self.strength)
         caveat=QLabel('建议每次只放当前报告相关的 10–20 个术语。中英文分别建方案，并在“收音设置”选择实际转录语言。Qwen/Mega 的背景与词表最多 160 token；提示可能造成误报、漏识别或拼写变化，Mega 不保证优于 Qwen。')
-        caveat.setWordWrap(True);caveat.setObjectName('muted');root.addWidget(caveat)
+        caveat.setWordWrap(True);caveat.setObjectName('muted');root.addWidget(caveat);self.caveat=caveat;self.model_id='parakeet'
         root.addStretch()
         self.timer=QTimer(self);self.timer.setSingleShot(True);self.timer.setInterval(250);self.timer.timeout.connect(self.update_counter)
         self.terms.textChanged.connect(self.schedule_counter);self.background.textChanged.connect(self.schedule_counter)
         self.set_values(value)
+
+    def set_model(self,model_id):
+        self.model_id=model_id
+        key={'parakeet':'parakeet','parakeet-v3':'parakeet_v3','qwen3-asr-1.7b':'qwen','mega-asr':'mega'}.get(model_id)
+        parakeet=model_id in ('parakeet','parakeet-v3')
+        for name,field in self.flags.items():self.form.setRowVisible(field,name==key)
+        self.form.setRowVisible(self.background,not parakeet)
+        self.form.setRowVisible(self.strength,parakeet)
+        self.caveat.setText('建议每次只放当前报告相关的 10–20 个术语。提示可能造成误报、漏识别或拼写变化。' + ('' if parakeet else ' Qwen/Mega 的背景与词表最多 160 token。') + (' Mega 效果需对照，不能保证优于 Qwen。' if model_id=='mega-asr' else ''))
+        self.update_counter()
 
     def schedule_counter(self):
         if not self.loading:self.timer.start()
@@ -106,4 +116,4 @@ class DomainEditor(QWidget):
 
     def update_counter(self):
         terms=[s.strip() for s in self.terms.toPlainText().splitlines() if s.strip()]
-        self.counter.setText(f'{len(terms)} 个词组 · 最多 64 个。启用的 Qwen/Mega 提示会在保存时后台检查 160 token 上限。')
+        self.counter.setText(f'{len(terms)} 个词组 · 最多 64 个。' + ('' if self.model_id in ('parakeet','parakeet-v3') else '启用的提示会在保存时后台检查 160 token 上限。'))

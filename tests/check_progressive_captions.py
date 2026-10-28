@@ -127,8 +127,8 @@ try:
     dialog.load_draft(settings);assert dialog.progressive_limit.value()==4 and dialog.progressive_interval.value()==.5
     export_configuration(settings,config);restored=import_configuration(config)
     assert restored['progressive_translation_limit']==4 and restored['progressive_translation_interval']==.5 and restored['confirmation_wait']==.5
-    dialog.asr_model.setCurrentIndex(dialog.asr_model.findData('qwen3-asr-1.7b'));assert not dialog.confirmation_wait.isEnabled()
-    dialog.asr_model.setCurrentIndex(dialog.asr_model.findData('parakeet-v3'));assert dialog.confirmation_wait.isEnabled()
+    dialog.asr_model.setCurrentIndex(dialog.asr_model.findData('qwen3-asr-1.7b'));assert not dialog.appearance.isRowVisible(dialog.confirmation_wait)
+    dialog.asr_model.setCurrentIndex(dialog.asr_model.findData('parakeet-v3'));assert dialog.appearance.isRowVisible(dialog.confirmation_wait)
     dialog.reject();dialog.deleteLater()
     for key,value in [('progressive_translation_limit',0),('progressive_translation_limit',2.5),('progressive_translation_limit',True),('progressive_translation_interval',0),('progressive_translation_interval',float('nan')),('confirmation_wait',0),('confirmation_wait',float('inf'))]:
         try:validate_configuration(dict(w.settings,**{key:value}));raise AssertionError('accepted invalid preview setting')

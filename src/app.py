@@ -1075,6 +1075,11 @@ class Window(QMainWindow):
 
 
 def main():
+    # DirectWrite can render thin CJK strokes unevenly at common Windows scales.
+    # Respect explicit Qt platform selection, including headless test platforms.
+    if sys.platform=='win32' and 'QT_QPA_PLATFORM' not in os.environ and not any(
+        arg=='-platform' or arg.startswith('-platform=') for arg in sys.argv[1:]):
+        os.environ['QT_QPA_PLATFORM']='windows:fontengine=freetype'
     application=QApplication(sys.argv)
     application.setApplicationName('实时字幕');application.setApplicationDisplayName('实时字幕')
     application.setFont(QFont('Microsoft YaHei UI',10))

@@ -157,7 +157,7 @@ class SettingsDialog(QDialog):
         form.addRow(row)
         tabs.addTab(scroll_page(service),'翻译服务')
         display = QWidget()
-        appearance = QFormLayout(display)
+        appearance = QFormLayout(display);self.appearance=appearance
         appearance.setContentsMargins(20,24,20,20)
         appearance.setVerticalSpacing(20)
         self.audio_source_editor=AudioSourceEditor(settings.get('audio_source'))
@@ -179,14 +179,14 @@ class SettingsDialog(QDialog):
         if index>=0:self.target_language.setCurrentIndex(index)
         else:self.target_language.setEditText(selected)
         form.insertRow(1,'翻译目标语言',self.target_language)
-        model_note=QLabel('全部转录神经网络严格使用 NPU。Parakeet v2 仅英语；v3 自动辨别 25 种欧洲语言，保留标点和词时间戳，语言选项仅作分句与翻译提示。中文请选择 Qwen/Mega；其预览至少每 3 秒更新，时间轴为近似值。')
+        model_note=QLabel();self.model_note=model_note
         model_note.setWordWrap(True);model_note.setObjectName('muted');appearance.addRow(model_note)
         self.feature_backend=QComboBox()
         self.feature_backend.addItem('CPU · 默认', 'numpy')
         self.feature_backend.addItem('GPU · FP32 · 实验', 'gpu')
         self.feature_backend.setCurrentIndex(max(0,self.feature_backend.findData(settings.get('feature_backend','numpy'))))
-        feature_note=QLabel('GPU 选项只处理 Parakeet v2 的频谱特征；v3 使用轻量 CPU FFT 前处理。全部转录网络仍使用 NPU。整机省电效果需结合实际负载测试。下次收音生效。')
-        feature_note.setWordWrap(True);feature_note.setObjectName('muted')
+        feature_note=QLabel('GPU 选项只处理 Parakeet v2 的频谱特征。全部转录网络仍使用 NPU。整机省电效果需结合实际负载测试。下次收音生效。')
+        feature_note.setWordWrap(True);feature_note.setObjectName('muted');self.feature_note=feature_note
         self.typography_editor=TypographyEditor(settings)
         self.typography_editor.changed.connect(self.typography_preview.emit)
         self.en_size=self.typography_editor.fields['english_size']
@@ -218,8 +218,6 @@ class SettingsDialog(QDialog):
         self.confirmation_wait=QDoubleSpinBox();self.confirmation_wait.setRange(.5,6.)
         self.confirmation_wait.setSingleStep(.5);self.confirmation_wait.setDecimals(1);self.confirmation_wait.setSuffix(' 秒')
         self.confirmation_wait.setValue(settings.get('confirmation_wait',3.))
-        self.confirmation_wait.setEnabled(self.asr_model.currentData() in PARAKEET_MODELS)
-        self.asr_model.currentIndexChanged.connect(lambda:self.confirmation_wait.setEnabled(self.asr_model.currentData() in PARAKEET_MODELS))
         self.confirmation_wait.setToolTip('仅实时 Parakeet v2/v3：默认 3 秒。稳定句子提前提交；降低会更早采用仍可能修正的词，并标记边界待核。是等待目标，不包含识别刷新、推理和翻译耗时；没有可靠句界时仍会保护未完成短语。保存后下次收音生效。')
         appearance.addRow('Parakeet 字幕确认等待上限',self.confirmation_wait)
         agc=normalize_agc(settings.get('agc'))
@@ -238,7 +236,7 @@ class SettingsDialog(QDialog):
         for field in self.agc_fields.values():field.valueChanged.connect(lambda:self.gain_preview.emit(self.agc_values()))
         gain_note=QLabel('自动与手动增益实时作用于音频，取消会恢复。轻声检测增强在下次收音生效。静音时不主动抬升增益，突发大声会限制峰值；增益不能恢复已丢失的信噪比。')
         gain_note.setWordWrap(True);gain_note.setObjectName('muted');gain_form.addRow(gain_note)
-        note = QLabel('音频来源、模型、源语言、更新间隔与分句策略在保存后下次收音生效。翻译目标语言在“翻译服务”；音量增益在本页下方。')
+        note = QLabel('音频来源、模型、源语言、更新间隔与分句策略在保存后下次收音生效。翻译目标语言在“翻译服务”；音量增益在本页的折叠面板中。')
         note.setWordWrap(True)
         note.setObjectName('muted')
         appearance.addRow(note)
@@ -319,18 +317,35 @@ class SettingsDialog(QDialog):
         for form in self.findChildren(QFormLayout):
             form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
             form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
-        self.asr_model.currentIndexChanged.connect(self.update_dependencies)
+        self.asr_model.currentIndexChanged.connect(self.update_model_dependencies)
         self.protocol.currentIndexChanged.connect(self.update_dependencies)
         self.agc_enabled.toggled.connect(self.update_dependencies)
+        self.update_model_dependencies()
         self.update_dependencies()
 
-    def update_dependencies(self,*_):
+    def update_model_dependencies(self,*_):
         model=self.asr_model.currentData()
-        self.feature_backend.setEnabled(model=='parakeet');self.interval.setEnabled(model in PARAKEET_MODELS)
-        for index in range(self.source_language.count()):
-            self.source_language.model().item(index).setEnabled(supported_language(model,self.source_language.itemData(index)))
-        if not supported_language(model,self.source_language.currentData()):self.source_language.setCurrentIndex(self.source_language.findData('auto'))
-        self.interval.setToolTip('Parakeet 的预览间隔；Qwen/Mega 使用至少 3 秒的预览间隔')
+        current=self.source_language.currentData()
+        if model=='parakeet' and current=='auto':current='English'
+        if not supported_language(model,current):current='English' if model=='parakeet' else 'auto'
+        self.source_language.blockSignals(True);self.source_language.clear()
+        for value,label,_ in LANGUAGES:
+            if supported_language(model,value) and not (model=='parakeet' and value=='auto'):
+                self.source_language.addItem(label,value)
+        self.source_language.setCurrentIndex(self.source_language.findData(current));self.source_language.blockSignals(False)
+        parakeet=model in PARAKEET_MODELS
+        for field in (self.interval,self.confirmation_wait):self.appearance.setRowVisible(field,parakeet)
+        self.appearance.setRowVisible(self.feature_backend,model=='parakeet')
+        self.appearance.setRowVisible(self.feature_note,model=='parakeet')
+        notes={
+            'parakeet':'Parakeet v2 仅支持英语；转录神经网络使用 NPU。',
+            'parakeet-v3':'Parakeet v3 自动辨别 25 种欧洲语言，保留标点和词时间戳；语言选项用于分句与翻译提示。转录神经网络使用 NPU。',
+            'qwen3-asr-1.7b':'Qwen 支持多语言；预览至少约 3 秒更新，实际间隔还取决于推理耗时，时间轴为近似值。转录神经网络使用 NPU。',
+            'mega-asr':'Mega 支持多语言与抗噪；预览至少约 3 秒更新，实际间隔还取决于推理耗时，时间轴为近似值。转录神经网络使用 NPU。'}
+        self.model_note.setText(notes.get(model,''))
+        self.domain_editor.set_model(model)
+
+    def update_dependencies(self,*_):
         anthropic=self.protocol.currentData()=='anthropic'
         self.version.setEnabled(anthropic);self.workspace.setEnabled(anthropic)
         for key,field in self.agc_fields.items():field.setEnabled(key=='manual_db' or self.agc_enabled.isChecked())
@@ -466,7 +481,11 @@ class SettingsDialog(QDialog):
         self.interval.setCurrentIndex(max(0,self.interval.findData(settings['interval'])))
         self.segmentation.setCurrentIndex(self.segmentation.findData(settings['segmentation']))
         self.confirmation_wait.setValue(settings.get('confirmation_wait',3.))
+        self.asr_model.blockSignals(True)
         self.asr_model.setCurrentIndex(self.asr_model.findData(settings.get('asr_model','parakeet')))
+        self.source_language.clear()
+        for value,label,_ in LANGUAGES:self.source_language.addItem(label,value)
+        self.asr_model.blockSignals(False)
         self.feature_backend.setCurrentIndex(max(0,self.feature_backend.findData(settings.get('feature_backend','numpy'))))
         self.source_language.setCurrentIndex(self.source_language.findData(settings.get('source_language','auto')))
         index=self.target_language.findData(settings.get('target_language','简体中文'))
@@ -480,6 +499,8 @@ class SettingsDialog(QDialog):
         self.domain_editor.set_values(settings.get('domain_bias'))
         self.desktop_editor.set_values(settings.get('desktop_captions'),emit=True)
         self.audio_source_editor.set_values(settings.get('audio_source'))
+        self.update_model_dependencies()
+        self.update_dependencies()
 
     def import_config(self):
         path,_=QFileDialog.getOpenFileName(self,'导入工作台配置','','工作台配置 (*.json)')

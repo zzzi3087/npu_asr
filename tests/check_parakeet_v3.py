@@ -84,8 +84,8 @@ from settings_dialog import SettingsDialog
 from file_queue import FileQueue
 qt=QApplication([]);dialog=SettingsDialog(default_settings())
 dialog.asr_model.setCurrentIndex(dialog.asr_model.findData('parakeet-v3'))
-assert dialog.asr_model.count()==4 and dialog.interval.isEnabled() and not dialog.feature_backend.isEnabled()
-assert not dialog.source_language.model().item(dialog.source_language.findData('Chinese')).isEnabled()
+assert dialog.asr_model.count()==4 and dialog.appearance.isRowVisible(dialog.interval) and not dialog.appearance.isRowVisible(dialog.feature_backend)
+assert dialog.source_language.findData('Chinese') == -1
 assert dialog.source_language.model().item(dialog.source_language.findData('Ukrainian')).isEnabled()
 dialog.source_language.setCurrentIndex(dialog.source_language.findData('Ukrainian'))
 dialog.asr_model.setCurrentIndex(dialog.asr_model.findData('qwen3-asr-1.7b'))
