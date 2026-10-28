@@ -22,6 +22,7 @@ from switch_button import SwitchButton
 from audio_sources import source_label
 from history_row import HistoryRow
 from workspace_header import WorkspaceHeader
+from languages import ASR_MODELS,source_languages,source_language_for_model,label as language_label
 from app_paths import RESOURCE_DIR
 from caption_visibility import caption_visibility
 from tray_controller import TrayController
@@ -172,6 +173,23 @@ class Window(QMainWindow):
         self.subtitle.setSizePolicy(QSizePolicy.Policy.Ignored,QSizePolicy.Policy.Preferred)
         title_column.addWidget(self.title)
         title_column.addWidget(self.subtitle)
+        self.asr_selection=QWidget();self.asr_selection.setObjectName('liveAsrSelection')
+        selection_layout=QHBoxLayout(self.asr_selection)
+        selection_layout.setContentsMargins(0,0,0,0);selection_layout.setSpacing(8)
+        self.live_model=QComboBox();self.live_language=QComboBox()
+        for name,model in ASR_MODELS:self.live_model.addItem(name.split(' · ')[0],model)
+        for text,field,chars in (('实时模型',self.live_model,14),('转录语言',self.live_language,8)):
+            column=QVBoxLayout();column.setSpacing(2)
+            caption=QLabel(text);caption.setObjectName('muted');caption.setBuddy(field)
+            field.setAccessibleName(text);field.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+            field.setMinimumContentsLength(chars)
+            field.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+            column.addWidget(caption);column.addWidget(field);selection_layout.addLayout(column)
+        self.live_model.setToolTip('实时收音使用的模型；选择后自动保存，下次开始收音生效。文件队列有独立模型。')
+        self.live_language.setToolTip('实时收音的源语言；随模型更新可选项。翻译目标语言仍在设置中选择。')
+        self.live_model.activated.connect(self.change_live_model)
+        self.live_language.activated.connect(self.change_live_language)
+        self.sync_live_asr_controls()
         controls_widget=QWidget();controls_widget.setObjectName('headerControls')
         controls=QHBoxLayout(controls_widget)
         controls.setContentsMargins(0,0,0,0);controls.setSpacing(6)
@@ -219,7 +237,7 @@ class Window(QMainWindow):
         self.start.setEnabled(False)
         self.start.clicked.connect(self.toggle)
         top.addWidget(self.start)
-        self.header=WorkspaceHeader(title_group,controls_widget,status_widget)
+        self.header=WorkspaceHeader(title_group,controls_widget,status_widget,selection=self.asr_selection)
         main.addWidget(self.header)
         self.meter=QProgressBar()
         self.meter.setRange(0,100)
@@ -272,7 +290,7 @@ class Window(QMainWindow):
         self.notice.hide();footer.addWidget(self.notice,1)
         self.notice_timer=QTimer(self);self.notice_timer.setSingleShot(True)
         self.notice_timer.timeout.connect(self.clear_notice)
-        self.diagnostics=QLabel('音频不保存')
+        self.diagnostics=QLabel('')
         self.diagnostics.setObjectName('muted')
         footer.addWidget(self.diagnostics)
         self.translation_warning=QLabel('翻译 API 不可用')
@@ -498,6 +516,36 @@ class Window(QMainWindow):
         self.provider_label.setText(model+' → '+target+' · '+(f'{p["name"]} · {p["model"] or "请填写模型"}' if self.settings['translate'] else '翻译已关闭'))
         self.provider_label.setToolTip(self.provider_label.text())
 
+    def sync_live_asr_controls(self):
+        model=self.settings.get('asr_model','parakeet')
+        language=source_language_for_model(model,self.settings.get('source_language','auto'))
+        self.live_model.blockSignals(True);self.live_language.blockSignals(True)
+        self.live_model.setCurrentIndex(self.live_model.findData(model))
+        self.live_language.clear()
+        for value,name,_ in source_languages(model):self.live_language.addItem(name,value)
+        self.live_language.setCurrentIndex(self.live_language.findData(language))
+        self.live_model.blockSignals(False);self.live_language.blockSignals(False)
+
+    def change_live_model(self,*_):
+        self.set_live_asr(self.live_model.currentData(),self.settings.get('source_language','auto'))
+
+    def change_live_language(self,*_):
+        self.set_live_asr(self.settings.get('asr_model','parakeet'),self.live_language.currentData())
+
+    def set_live_asr(self,model,language):
+        if self.closing or model not in {value for _,value in ASR_MODELS}:return
+        choice={'asr_model':model,'source_language':source_language_for_model(model,language)}
+        if all(self.settings.get(key)==value for key,value in choice.items()):
+            self.sync_live_asr_controls();return
+        candidate=dict(self.settings,**choice)
+        try:save_settings(candidate)
+        except OSError:
+            self.sync_live_asr_controls();self.notify('模型与语言未能保存，请检查本机存储空间');return
+        self.settings.update(choice)
+        self.sync_live_asr_controls();self.refresh_provider()
+        name=next(name.split(' · ')[0] for name,value in ASR_MODELS if value==model)
+        self.notify(name+' · '+language_label(choice['source_language'])+'，下次开始收音时使用')
+
     def new_session_view(self):
         if self.capturing or self.file_queue.active:
             self.view_session=self.current_session
@@ -686,7 +734,7 @@ class Window(QMainWindow):
             self.downloading=False;self.meter.setValue(0)
             self.start.setText('取消文件转录' if self.file_queue.active else ('停止收音' if self.capturing else '开始收音'))
             self.start.setEnabled((self.ready or bool(self.file_queue.active)) and not self.closing)
-            self.diagnostics.setText('音频不保存')
+            self.diagnostics.clear()
         elif kind=='download_cancelled':
             self.downloading=False;self.state.setText('下载已取消 · 下次可继续');self.notify(str(value))
         elif kind=='status':
@@ -913,6 +961,7 @@ class Window(QMainWindow):
                 self.history.update(ident,'queued' if self.settings['translate'] else 'disabled')
                 affected.add(sid)
             self.apply_display()
+            self.sync_live_asr_controls()
             self.refresh_provider()
             self.notify('设置已保存')
             if self.current_session:self.pump(self.current_session)

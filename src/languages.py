@@ -25,5 +25,13 @@ def supported_language(model,language):
     if model=='parakeet-v3':return language=='auto' or language in PARAKEET_V3_LANGUAGES
     return model in ('qwen3-asr-1.7b','mega-asr') and language in QWEN_LANGUAGES
 
+def source_languages(model):
+    return [item for item in LANGUAGES if supported_language(model,item[0])
+        and not (model=='parakeet' and item[0]=='auto')]
+
+def source_language_for_model(model,language):
+    if model=='parakeet':return 'English'
+    return language if supported_language(model,language) else 'auto'
+
 TARGETS=[('简体中文','简体中文'),('繁體中文','繁體中文')]+[(name,label) for name,label,_ in LANGUAGES if name not in ('auto','Chinese')]
 def label(language):return next((text for name,text,_ in LANGUAGES if name==language),language)

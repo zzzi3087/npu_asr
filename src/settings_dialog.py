@@ -11,7 +11,7 @@ from theme_editor import ThemeEditor
 from typography_editor import TypographyEditor
 from config_io import export_configuration,import_configuration
 from audio_gain import normalize_agc
-from languages import LANGUAGES,TARGETS,ASR_MODELS,PARAKEET_MODELS,supported_language
+from languages import LANGUAGES,TARGETS,ASR_MODELS,PARAKEET_MODELS,supported_language,source_languages,source_language_for_model
 from domain_editor import DomainEditor
 from desktop_caption_editor import DesktopCaptionEditor
 from settings_pages import SettingsPages,Foldout
@@ -325,13 +325,9 @@ class SettingsDialog(QDialog):
 
     def update_model_dependencies(self,*_):
         model=self.asr_model.currentData()
-        current=self.source_language.currentData()
-        if model=='parakeet' and current=='auto':current='English'
-        if not supported_language(model,current):current='English' if model=='parakeet' else 'auto'
+        current=source_language_for_model(model,self.source_language.currentData())
         self.source_language.blockSignals(True);self.source_language.clear()
-        for value,label,_ in LANGUAGES:
-            if supported_language(model,value) and not (model=='parakeet' and value=='auto'):
-                self.source_language.addItem(label,value)
+        for value,label,_ in source_languages(model):self.source_language.addItem(label,value)
         self.source_language.setCurrentIndex(self.source_language.findData(current));self.source_language.blockSignals(False)
         parakeet=model in PARAKEET_MODELS
         for field in (self.interval,self.confirmation_wait):self.appearance.setRowVisible(field,parakeet)
