@@ -47,6 +47,16 @@ assert not s.update(h,h,13), 'Plain word count must not cut a sentence'
 tail=words('with sufficient precision.',start=13)
 assert len(s.update(tail,tail,15,acoustic_end=True,idle=.8))==1
 
+# A visible provisional clause must not turn into a durable half sentence just
+# because the old soft age threshold is reached. Real sentence ends still win.
+h=words('The detector measures many different particles during the experiment; however the team compares these observations against independent theoretical calculations',step=.35)
+s=SentenceAssembler(soft_chunks=False)
+assert not s.update(h,h,10)
+assert not s.update([],h,11)
+tail=words('before publishing the final result.',start=11)
+out=s.update(tail,tail,13,final=True)
+assert len(out)==1 and out[0]['text']==' '.join(w for w,_ in h+tail)
+
 # Revision removes a speculative period; punctuation needs repeated right context.
 s=SentenceAssembler();h=words('We measured the response. With care')
 assert not s.update(h,h,2)

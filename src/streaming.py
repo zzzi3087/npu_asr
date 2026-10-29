@@ -73,6 +73,7 @@ class Timeline:
         self.max_wait=normalize_confirmation_wait(max_wait)
         self.previous = []
         self.last_forced = False
+        self.agreed_through = None
 
     def cut(self, current):
         if not self.confirmed or not current:
@@ -164,11 +165,15 @@ class Timeline:
             sentence=self.sentence_prefix(remaining,previous,end,stable,language)
             if sentence>stable:
                 stable=sentence;self.last_forced=True
+            # Pass the existing agreement decision downstream. An age timeout
+            # alone is deliberately not evidence of textual agreement.
+            self.agreed_through=remaining[stable-1][1] if stable else None
             if remaining and remaining[0][1] < end-self.max_wait:
                 deadline = sum(stamp <= end-self.max_wait*2/3 for _,stamp in remaining)
                 if deadline > stable:
                     stable = deadline
                     self.last_forced = True
+        if final:self.agreed_through=remaining[-1][1] if remaining else None
         new = remaining[:stable]
         self.confirmed.extend(new)
         self.confirmed = self.confirmed[-100:]
@@ -205,7 +210,8 @@ class Recognizer:
         self.last_infer = 0
         self.confirmation_wait=normalize_confirmation_wait(confirmation_wait)
         self.timeline = Timeline(self.confirmation_wait)
-        self.segmenter = SentenceAssembler(segmentation,language=getattr(engine,'language','English'),max_wait=self.confirmation_wait)
+        self.segmenter = SentenceAssembler(segmentation,language=getattr(engine,'language','English'),max_wait=self.confirmation_wait,
+            soft_chunks=not progressive)
         self.pauses = deque(maxlen=128)
         self.pause_start = None
         self.last_voice_clock = 0
@@ -317,11 +323,14 @@ class Recognizer:
             language=getattr(self.engine,'language','English'))
         hypothesis,ends=timed_hypothesis(result,self.base/16000)
         events = self.segmenter.update(new,hypothesis,self.clock/16000,uncertain=self.timeline.last_forced,
-            final=stop,acoustic_end=final,idle=(self.clock-self.last_voice_clock)/16000,pauses=self.pauses,ends=ends)
+            final=stop,acoustic_end=final,idle=(self.clock-self.last_voice_clock)/16000,pauses=self.pauses,ends=ends,
+            agreed_through=self.timeline.agreed_through)
         for event in events:self.commit(event)
-        if self.prefix and self.segmenter.words and not stop:
-            value=self.prefix.offer(self.segmenter.text,self.segmenter.sequence,self.clock/16000,
-                self.segmenter.words[0].stamp,getattr(self.engine,'language','English'))
+        if self.prefix and not stop:
+            text=' '.join(part for part in (self.segmenter.text,' '.join(w for w,_ in preview)) if part)
+            start=self.segmenter.words[0].stamp if self.segmenter.words else preview[0][1] if preview else self.clock/16000
+            value=self.prefix.offer(text,self.segmenter.sequence,self.clock/16000,
+                start,getattr(self.engine,'language','English'))
             if value:self.emit('provisional',value)
         self.preview(preview)
         if not reusable:

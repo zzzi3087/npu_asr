@@ -81,6 +81,36 @@ for wait,expected in ((.5,True),(6.,False)):
  assert not assembler.update(hypothesis,hypothesis,2),events
 engine=Engine();recognizer=streaming.Recognizer(engine,lambda *_:None,confirmation_wait=.5)
 recognizer.reset();assert recognizer.timeline.max_wait==recognizer.segmenter.max_wait==.5
+
+# Already agreed content must not wait another cycle just because the period
+# and next sentence first arrive together in the second hypothesis.
+class LatePeriodEngine:
+ model_id='parakeet-v3';language='English';max_samples=240000
+ def __init__(self):self.calls=0
+ def infer(self,audio):
+  self.calls+=1
+  text='The sample is ready' if self.calls==1 else 'The sample is ready. We begin another measurement'
+  tokens=words(text,.2)
+  return dict(text=text,words=tokens,word_spans=[(w,t,t+.15) for w,t in tokens],infer_ms=1)
+
+def late_period_replay(legacy):
+ engine=LatePeriodEngine();events=[]
+ recognizer=streaming.Recognizer(engine,lambda k,v:events.append((k,dict(v,clock=recognizer.clock/16000))),progressive=True)
+ if legacy:
+  update=recognizer.segmenter.update
+  def legacy_update(*args,**kwargs):
+   kwargs.pop('agreed_through',None)
+   return update(*args,**kwargs)
+  recognizer.segmenter.update=legacy_update
+ for _ in range(160):recognizer.push(np.full(512,.01,np.float32));recognizer.poll()
+ result=next(v for k,v in events if k=='committed')
+ assert result['text']=='The sample is ready.'
+ return result['clock'],engine.calls
+
+old_delivery,old_calls=late_period_replay(True)
+new_delivery,new_calls=late_period_replay(False)
+assert new_delivery<old_delivery and old_calls==new_calls
 print(json.dumps({'lecture_boundary_cases':len(examples),'late_punctuation_without_third_pass':True,
  'synthetic_first_submission_before':before,'synthetic_first_submission_after':after,
- 'same_asr_calls':calls_after,'large_rewrite_guard':True,'configurable_confirmation_wait':True}))
+ 'same_asr_calls':calls_after,'large_rewrite_guard':True,'configurable_confirmation_wait':True,
+ 'shared_agreement_before':old_delivery,'shared_agreement_after':new_delivery,'shared_agreement_asr_calls':new_calls}))

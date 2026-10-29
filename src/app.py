@@ -713,7 +713,7 @@ class Window(QMainWindow):
         self.worker.commands.put(('start',{'audio_source':dict(self.settings['audio_source']),'quiet':self.settings['quiet'],
             'interval':self.settings['interval'],'segmentation':self.settings.get('segmentation','balanced'),
             'confirmation_wait':self.settings.get('confirmation_wait',3.),
-            'progressive_translation':self.settings['translate'] and self.settings.get('progressive_translation',True),
+            'progressive_translation':self.settings.get('progressive_translation',True),
             'progressive_translation_limit':self.settings.get('progressive_translation_limit',2),
             'progressive_translation_interval':self.settings.get('progressive_translation_interval',1.),
             'asr_model':self.settings['asr_model'],'source_language':self.settings['source_language'],
@@ -840,21 +840,32 @@ class Window(QMainWindow):
         cursor.mergeCharFormat(char)
 
     def offer_draft(self,value):
-        # Optional work never queues behind full sentences, and never retries.
-        if (not self.capturing or not self.current_session or not self.settings['translate']
-                or not self.settings.get('progressive_translation',True) or self.translation_available is False
-                or self.active_jobs or not self.translator.jobs.empty()):return
-        try:
-            profile=dict(self.profile(),source_language=value.get('source_language','auto'),
-                target_language=self.settings.get('target_language','简体中文'),_provisional=True)
-            validate_profile(profile);key=get_key(profile)
-        except Exception:return
-        row=self.drafts.add(self.current_session,value)
+        if not self.capturing or not self.current_session or not self.settings.get('progressive_translation',True):return
+        old=self.drafts.entries.get((self.current_session,value['sentence_id']))
+        old_id=old['id'] if old else None
+        if value.get('withdraw'):
+            self.drafts.add(self.current_session,value)
+            if old_id:self.translator.cancel_queued(segment=old_id)
+            self.refresh_desktop();self.render();return
+        # Display is independent of network availability. Optional translation
+        # still never queues behind full sentences and never retries.
+        allowed=(value.get('translate',True) and self.settings['translate'] and self.translation_available is not False
+            and not self.active_jobs and self.translator.jobs.empty())
+        if allowed:
+            try:
+                profile=dict(self.profile(),source_language=value.get('source_language','auto'),
+                    target_language=self.settings.get('target_language','简体中文'),_provisional=True)
+                validate_profile(profile);key=get_key(profile)
+            except Exception:allowed=False
+        if not allowed and not value.get('revisable'):return
+        row=self.drafts.add(self.current_session,dict(value,translate=bool(allowed)))
         if not row:return
-        context=[r['en'] for r in self.history.rows(self.current_session,2)]
-        try:self.translator.enqueue(self.current_session,row['id'],row.get('pending_text',row['en']),context,profile,key)
-        except queue.Full:
-            self.drafts.translated(row['id'],'',False);return
+        if old_id and old_id!=row['id']:self.translator.cancel_queued(segment=old_id)
+        if allowed:
+            context=[r['en'] for r in self.history.rows(self.current_session,2)]
+            try:self.translator.enqueue(self.current_session,row['id'],row.get('pending_text',row['en']),context,profile,key)
+            except queue.Full:self.drafts.translated(row['id'],'',False)
+        self.refresh_desktop()
         self.render()
 
     def pump(self,sid):

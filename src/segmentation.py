@@ -40,18 +40,20 @@ class Word:
     stable_terminal:bool=False
     end:float|None=None
     stable_context:bool=False
+    agreed:bool=False
 
 
 class SentenceAssembler:
-    def __init__(self,mode='balanced',language='English',max_wait=6.):
+    def __init__(self,mode='balanced',language='English',max_wait=6.,soft_chunks=True):
         self.mode=MODES.get(mode,MODES['balanced'])
         self.max_wait=confirmation_wait(max_wait)
         self.language=language
+        self.soft_chunks=soft_chunks
         self.words=[];self.hypothesis=Hypothesis();self.previous=Hypothesis()
         self.next_check=float('inf');self._text='';self.scans=0
         self.sequence=0
 
-    def update(self,new,hypothesis,now,uncertain=False,final=False,acoustic_end=False,idle=0.,pauses=(),ends=None):
+    def update(self,new,hypothesis,now,uncertain=False,final=False,acoustic_end=False,idle=0.,pauses=(),ends=None,agreed_through=None):
         if not new and hypothesis is None and not final and now<self.next_check:return []
         self.words.extend(Word(text,stamp,uncertain) for text,stamp in new)
         if hypothesis is not None:
@@ -59,7 +61,9 @@ class SentenceAssembler:
             for word in self.words:
                 current=self.hypothesis.find(word);old=self.previous.find(word)
                 if current is not None:
+                    if normalized(word.text)!=normalized(self.hypothesis.words[current][0]):word.agreed=False
                     word.text=self.hypothesis.words[current][0]
+                    if agreed_through is not None and word.stamp<=agreed_through:word.agreed=True
                     mark=terminal(word.text,language=self.language)
                     word.stable_terminal=bool(mark) and old is not None and mark==terminal(self.previous.words[old][0],language=self.language)
                     current_tail=self.hypothesis.words[current+1:current+3]
@@ -109,7 +113,9 @@ class SentenceAssembler:
 
     def boundary(self,now,final,acoustic_end,idle,pauses):
         text=' '.join(w.text for w in self.words);language=rule_language(text,self.language)
+        agreed=True
         for index,word in enumerate(self.words):
+            agreed=agreed and word.agreed
             next_text,next_stamp=self.lookahead(index)
             mark=terminal(word.text,next_text,language)
             if not mark:continue
@@ -119,7 +125,10 @@ class SentenceAssembler:
             # endpoint can confirm a complete sentence in a single pass.
             # Stable following words also establish a boundary when the model
             # adds punctuation one pass later. No third recognition is needed.
-            supported=final or acoustic_end or word.stable_terminal or (word.stable_context and not word.uncertain)
+            # Agreement already established by Timeline must not wait for a
+            # second independent punctuation agreement cycle. Require right
+            # context; a decoder's terminal period alone remains provisional.
+            supported=final or acoustic_end or agreed or word.stable_terminal or (word.stable_context and not word.uncertain)
             if supported and (next_text or acoustic_end or final):return index+1,'sentence'
             ended=word.end if word.end is not None else word.stamp+.2
             if now-ended>=self.max_wait and len(self.right_context(index).split())>=2:
@@ -129,6 +138,10 @@ class SentenceAssembler:
         if idle>=wait:return len(self.words),'pause'
         age=now-self.words[0].stamp
         hard=age>=self.mode['hard'] or len(self.words)>=self.mode['maximum']
+        # With reversible body captions, readability no longer requires saving
+        # a partial sentence. Keep the bounded emergency limit for pathological
+        # unpunctuated input and preserve legacy file/off-mode chunking.
+        if not self.soft_chunks and not hard:return 0,''
         if not hard and (age<self.mode['soft'] or len(self.words)<14):return 0,''
         candidates=[]
         for count in range(4,len(self.words)):
@@ -141,7 +154,7 @@ class SentenceAssembler:
             mark=last.rstrip(CLOSERS)[-1:]
             strong=mark in (';',':') or (mark==',' and (pause>=.35 or plain(following) in CLAUSE_STARTERS))
             if strong or pause>=.6:candidates.append((pause+(1 if strong else 0),count))
-        if candidates:return max(candidates)[1],'clause'
+        if candidates:return max(candidates)[1],'limit' if not self.soft_chunks else 'clause'
         if hard:
             # Bounded fallback for pathological unpunctuated streams only.
             # Keep recent context and visibly mark an uncertain boundary.

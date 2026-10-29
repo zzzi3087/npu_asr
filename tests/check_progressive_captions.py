@@ -13,8 +13,10 @@ import streaming,qwen_streaming
 long='The detector measures many different particles during each experiment and the scientists compare these observations against detailed predictions from several independent theoretical calculations'
 p=StablePrefix();assert p.offer(long,0,3,0) is None
 draft=p.offer(long,0,6,0);assert draft and len(draft['text'].split())>=10
-for now in range(7,50):assert p.offer(long+' with further observations',0,now,0) is None
-assert p.offer('A short sentence.',1,60,50) is None
+for now in range(7,50):
+    value=p.offer(long+' with further observations',0,now,0)
+    assert not value or not value.get('translate'),value
+assert p.offer('A short sentence.',1,60,50)['text']=='A short sentence.'
 p=StablePrefix();p.offer(long,0,3,0)
 assert p.offer('An entirely revised sentence which has no stable prefix at all',0,7,0) is None
 p=StablePrefix();chinese='我们通过对多个不同能量区间的实验数据进行详细分析来检验理论模型并比较观测结果'
@@ -28,14 +30,14 @@ for limit in (1,2,3,10):
         now=6+1.25*step
         p.offer(text,0,now-.1,0)
         event=p.offer(text,0,now,0)
-        if event:events.append(event)
+        if event and event.get('translate'):events.append(event)
     assert len(events)==limit,(limit,events)
     assert len({v['text'] for v in events})==limit
     assert all(len(a['text'])<len(b['text']) for a,b in zip(events,events[1:]))
 p=StablePrefix(2,.5);seed=' '.join('particle'+str(i) for i in range(20));expanded=seed+' '+' '.join('particle'+str(i) for i in range(20,35))
 p.offer(seed,0,3,0);assert p.offer(seed,0,6,0)
-assert p.offer(expanded,0,6.1,0) is None
-assert p.offer(expanded,0,6.4,0) is None
+assert not (p.offer(expanded,0,6.1,0) or {}).get('translate')
+assert not (p.offer(expanded,0,6.4,0) or {}).get('translate')
 assert p.offer(expanded,0,6.5,0)
 assert default_settings()['progressive_translation_limit']==2
 assert default_settings()['progressive_translation_interval']==1.
@@ -55,7 +57,8 @@ for model,cls in [('parakeet',streaming.Recognizer),('parakeet-v3',streaming.Rec
     for enabled in (False,True):
         events=[];engine=Engine(model);r=cls(engine,lambda k,v:events.append((k,v)),progressive=enabled)
         for _ in range(240):r.push(np.full(512,.01,np.float32));r.poll()
-        partials=[v for k,v in events if k=='provisional'];assert len(partials)==int(enabled),(model,partials)
+        partials=[v for k,v in events if k=='provisional'];assert bool(partials)==enabled,(model,partials)
+        assert sum(v.get('translate',False) for v in partials)==int(enabled),(model,partials)
         assert not any(k=='committed' for k,v in events)
         r.poll(stop=True);final=[v for k,v in events if k=='committed']
         assert len(final)==1 and final[0]['text']==long
@@ -105,16 +108,39 @@ try:
     assert '探测器测量多种粒子' not in w.browser.toPlainText() and len(w.history.rows(sid))==1
     assert w.desktop.pairs[-1]==(long,'完整句子译文。')
     w.on_translation(sid,ident,'迟到的旧译文',True);w.render_now();assert '迟到的旧译文' not in w.browser.toPlainText()
-    # Queue pressure, disabled setting, and unavailable API skip optional work.
+    # Queue pressure and unavailable API skip requests, but retain raw display.
     value=dict(draft,sentence_id=1)
     w.settings['progressive_translation']=False;w.on_event('provisional',value);assert not w.drafts.entries
-    w.settings['progressive_translation']=True;w.active_jobs.add('busy');w.on_event('provisional',value);assert not w.drafts.entries
-    w.active_jobs.clear();w.set_translation_status(False,'fixture');w.on_event('provisional',value);assert not w.drafts.entries
+    w.settings['progressive_translation']=True;w.active_jobs.add('busy');w.on_event('provisional',value)
+    assert w.drafts.entries and w.translator.jobs.empty()
+    w.active_jobs.clear();w.set_translation_status(False,'fixture');w.on_event('provisional',value)
+    assert w.drafts.entries and w.translator.jobs.empty()
     w.set_translation_status(None);w.on_event('provisional',value);assert w.drafts.entries
     # Final arrives before queued draft starts: cancel just that obsolete request.
     w.on_event('committed',dict(text=long,sentence_id=1,audio_start_ms=10000,audio_end_ms=20000))
     assert not w.drafts.entries and w.translator.jobs.qsize()==1
     assert not w.translator.jobs.get_nowait()[1].startswith('draft:')
+    # Immediate punctuation remains reversible in the actual UI integration.
+    reversible=dict(draft,sentence_id=40,text='The sensor is ready.',revisable=True,translate=True)
+    w.active_jobs.clear();w.on_event('provisional',reversible)
+    job=w.translator.jobs.get_nowait();old_id=job[1]
+    w.on_translation(sid,old_id,'传感器已准备好。',True)
+    before_rows=len(w.history.rows(sid))
+    w.on_event('provisional',dict(reversible,text='The sensor is faulty.',translate=False))
+    w.on_translation(sid,old_id,'迟到且已失效的译文',True);w.render_now()
+    assert 'The sensor is faulty.' in w.browser.toPlainText()
+    assert '传感器已准备好。' not in w.browser.toPlainText() and '迟到且已失效的译文' not in w.browser.toPlainText()
+    assert len(w.history.rows(sid))==before_rows and w.translator.jobs.empty()
+    w.on_event('provisional',dict(sentence_id=40,withdraw=True));w.render_now()
+    assert 'The sensor is faulty.' not in w.browser.toPlainText()
+    # Translation disabled still shows source, then durable completion replaces it.
+    w.settings['translate']=False
+    w.on_event('provisional',dict(reversible,sentence_id=41));w.render_now()
+    assert 'The sensor is ready.' in w.browser.toPlainText() and w.translator.jobs.empty()
+    w.on_event('committed',dict(text='The sensor is ready.',sentence_id=41,audio_start_ms=20000,audio_end_ms=22000))
+    w.render_now();assert w.browser.toPlainText().count('The sensor is ready.')==1
+    assert len(w.history.rows(sid))==before_rows+1 and not w.drafts.entries
+    w.settings['translate']=True
     config=root/'settings.json';export_configuration(w.settings,config)
     assert import_configuration(config)['progressive_translation'] is True
     from settings_dialog import SettingsDialog
@@ -174,6 +200,6 @@ assert d.translated(new_id,'new',True) and r['en']==long and r['zh']=='new'
 d=DraftCaptions();r=d.add('one',draft);d.translated(r['id'],'old',True);r=d.add('one',second)
 d.link('one',0,'final',draft['text']);assert not d.entries
 print(json.dumps(dict(all_four_models=True,no_extra_asr_calls=True,configurable_preview_limit=True,default_limit=2,default_interval=1,
-    stable_prefix_only=True,atomic_full_replacement=True,failed_final_preserves_draft=True,
-    no_duplicate_history_or_exports=True,late_results_ignored=True,queue_pressure_skips_drafts=True,
+    stable_clause_or_reversible_punctuation=True,atomic_full_replacement=True,failed_final_preserves_draft=True,
+    no_duplicate_history_or_exports=True,late_results_ignored=True,queue_pressure_skips_requests=True,
     optional_request_timeout_and_no_retry=True,settings_roundtrip=True)))

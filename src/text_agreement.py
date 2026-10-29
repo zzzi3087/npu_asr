@@ -31,10 +31,26 @@ class TextAgreement:
         if final:limit=len(tail)
         else:
             guards=rule_language(tail,language)
+            # CJK punctuation is a separate unit; it must not masquerade as a
+            # new word or break content agreement when a full stop arrives late.
+            spans=[m for m in UNITS.finditer(tail) if normalized(m.group())]
+            old_spans=[m for m in UNITS.finditer(old) if normalized(m.group())]
+            keys=[normalized(m.group()) for m in spans]
+            old_keys=[normalized(m.group()) for m in old_spans]
+            stable=0
+            for a,b in zip(keys,old_keys):
+                if a!=b:break
+                stable+=1
+            # Formatting is not word content. New suffix words can confirm a
+            # previously unpunctuated sentence without a third decoder pass.
+            growing=len(keys)>len(old_keys) and stable==len(old_keys)
             for lo,hi in sentence_spans(tail,guards):
                 part=tail[:hi]
                 if not tail[hi:].strip() or not terminal(part.split()[-1],language=guards):break
-                if not old.startswith(part):break
+                count=sum(m.end()<=hi for m in spans)
+                if count>stable:break
+                exact=old.startswith(part)
+                if not exact and not (growing and len(keys)-count>=2):break
                 limit=hi
         self.previous=text
         if not limit:return '',tail,start,start
