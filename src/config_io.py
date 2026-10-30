@@ -40,14 +40,14 @@ def validate_configuration(value):
     result=default_settings()
     for key in result:
         if key in value:result[key]=copy.deepcopy(value[key])
-    for key,lo,hi in [('english_size',12,72),('chinese_size',12,72),('opacity',40,100),('interval',1,2)]:
+    for key,lo,hi in [('english_size',12,72),('chinese_size',12,72),('opacity',40,100),('interval',.5,2)]:
         number=result[key]
         if type(number) not in (int,float) or not math.isfinite(number) or not lo<=number<=hi:
             raise ValueError('数值超出范围：'+key)
         if key!='interval':result[key]=int(number)
     for key in ('translate','topmost','quiet','show_source','show_translation','close_to_tray','minimize_to_tray','progressive_translation'):
         if type(result[key]) is not bool:raise ValueError('布尔参数无效：'+key)
-    if result['interval'] not in (1.,1.5,2.):raise ValueError('预览间隔须为 1、1.5 或 2 秒')
+    if result['interval'] not in (.5,.75,1.,1.5,2.):raise ValueError('预览间隔须为 0.5、0.75、1、1.5 或 2 秒')
     if type(result['progressive_translation_limit']) is not int or not 1<=result['progressive_translation_limit']<=10:
         raise ValueError('每句预译次数须为 1–10 的整数')
     gap=result['progressive_translation_interval']

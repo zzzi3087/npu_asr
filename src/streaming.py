@@ -1,11 +1,12 @@
 """Silero VAD, continuous resampling, and time-constrained window alignment."""
 import re
+import time
 from collections import deque
 from pathlib import Path
 import numpy as np
 import onnxruntime as ort
 from segmentation import SentenceAssembler,endpoint_samples,confirmation_wait as normalize_confirmation_wait
-from text_rules import normalized,terminal,complete_text,sentence_boundary,rule_language,SMALL_NUMBERS,TENS
+from text_rules import normalized,terminal,complete_text,sentence_boundary,sentence_spans,rule_language,SMALL_NUMBERS,TENS
 from audio_gain import DynamicGain,quiet_gain
 from model_manager import model_file
 
@@ -193,7 +194,15 @@ class Recognizer:
         self.vad = Vad()
         self.quiet = quiet
         self.interval_samples = int(interval * 16000)
-        self.silence_limit=endpoint_samples(segmentation,quiet)
+        self.low_latency=0<interval<1.
+        self.inference_cost=0.
+        self.confirmation_due=None
+        self.accelerated_sentence=None
+        self.confirmation_checks=0
+        self.confirmation_result=None
+        self.inference_generation=0
+        endpoint='fast' if self.low_latency and segmentation=='balanced' else segmentation
+        self.silence_limit=endpoint_samples(endpoint,quiet)
         self.stable_silence_limit=endpoint_samples('fast',quiet) if segmentation=='balanced' else self.silence_limit
         self.stable_voice=-1
         self.latest=None
@@ -220,6 +229,34 @@ class Recognizer:
     @property
     def audio(self):
         return self.storage[:self.size]
+
+    def refresh_samples(self):
+        # Low-latency is opt-in. Back off on a busy/slower NPU instead of
+        # repeatedly decoding accumulated audio at full duty cycle.
+        return max(self.interval_samples,int(self.inference_cost/0.35*16000)) if self.low_latency else self.interval_samples
+
+    def schedule_confirmation(self,text):
+        if not self.low_latency:return
+        if self.accelerated_sentence!=self.segmenter.sequence:
+            self.accelerated_sentence=self.segmenter.sequence
+            self.confirmation_checks=0
+            self.confirmation_result=None
+        if (self.confirmation_due is not None or self.confirmation_checks>=2
+                or self.confirmation_result==self.inference_generation):return
+        language=getattr(self.engine,'language','English')
+        for _,end in sentence_spans(text,language):
+            if not sentence_boundary(text[:end],text[end:].strip(),language):continue
+            # At most two accelerated rechecks per pending sentence, never a polling
+            # loop. Quiet audio still goes through the existing endpoint path.
+            # Include terminal candidates to seek right context. Punctuation
+            # alone still leaves them provisional. Each new result can arrange
+            # only one recheck; duplicate calls cannot postpone an existing due.
+            delay=max(.256,self.inference_cost/.6)
+            if delay*16000<self.refresh_samples():
+                self.confirmation_due=self.clock+int(delay*16000)
+                self.confirmation_checks+=1
+                self.confirmation_result=self.inference_generation
+            break
 
     def commit(self,event):
         self.emit('committed',dict(event,asr_model=getattr(self.engine,'model_id','parakeet'),
@@ -287,7 +324,9 @@ class Recognizer:
         final = stop or self.silence >= self.silence_limit or stable_end
         # Once a pause starts, wait for its endpoint rather than decoding the
         # same words once for a preview and again a few hundred ms later.
-        due = self.size >= 16000 and self.clock-self.last_infer >= self.interval_samples and self.silence<2560
+        due_at=self.last_infer+self.refresh_samples()
+        if self.confirmation_due is not None:due_at=min(due_at,self.confirmation_due)
+        due = self.size >= (8000 if self.low_latency else 16000) and self.clock>=due_at and self.silence<2560
         if not final and not due:
             return
         if len(self.audio) > self.engine.max_samples:
@@ -309,7 +348,13 @@ class Recognizer:
                     self.preview([])
             return
         reusable=final and self.latest is not None and self.last_infer>=self.last_voice_clock+2560
+        begun=time.perf_counter()
         result=self.latest if reusable else self.engine.infer(self.audio)
+        if not reusable:self.inference_generation+=1
+        if not reusable and self.low_latency:
+            elapsed=max(0.,time.perf_counter()-begun,float(result.get('infer_ms',0))/1000)
+            self.inference_cost=max(elapsed,self.inference_cost*.8)
+        self.confirmation_due=None
         previous=self.latest
         self.stable_voice=-1
         spans=result.get('word_spans',())
@@ -326,16 +371,18 @@ class Recognizer:
             final=stop,acoustic_end=final,idle=(self.clock-self.last_voice_clock)/16000,pauses=self.pauses,ends=ends,
             agreed_through=self.timeline.agreed_through)
         for event in events:self.commit(event)
+        text=' '.join(part for part in (self.segmenter.text,' '.join(w for w,_ in preview)) if part)
         if self.prefix and not stop:
-            text=' '.join(part for part in (self.segmenter.text,' '.join(w for w,_ in preview)) if part)
             start=self.segmenter.words[0].stamp if self.segmenter.words else preview[0][1] if preview else self.clock/16000
             value=self.prefix.offer(text,self.segmenter.sequence,self.clock/16000,
                 start,getattr(self.engine,'language','English'))
             if value:self.emit('provisional',value)
+        if not final:self.schedule_confirmation(text)
         self.preview(preview)
         if not reusable:
             self.emit('metrics', {'infer_ms': result['infer_ms'], 'audio_seconds': len(self.audio)/16000,
-                                'cpu_ms': result.get('cpu_ms', 0), **self.agc.metrics()})
+                                'cpu_ms': result.get('cpu_ms', 0),'refresh_interval_ms':self.refresh_samples()/16,
+                                **self.agc.metrics()})
         if final:self.reset()
         elif self.size>=192000 and self.timeline.confirmed:
             # Retain at least six seconds and 0.8 s before the latest confirmed
@@ -363,4 +410,5 @@ class Recognizer:
         self.silence = 0
         self.latest=None
         self.stable_voice=-1
+        self.confirmation_due=None
         self.timeline = Timeline(self.confirmation_wait)

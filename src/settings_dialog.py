@@ -205,9 +205,10 @@ class SettingsDialog(QDialog):
         self.quiet.setChecked(settings['quiet'])
         gain_form.addRow(self.quiet)
         self.interval = QComboBox()
-        for title,value in [('流畅 · 1 秒','1.0'),('省电 · 1.5 秒','1.5'),('低占用 · 2 秒','2.0')]:
+        for title,value in [('低延迟 · 自适应 0.5 秒','0.5'),('快速 · 自适应 0.75 秒','0.75'),('流畅 · 1 秒','1.0'),('省电 · 1.5 秒','1.5'),('低占用 · 2 秒','2.0')]:
             self.interval.addItem(title,float(value))
         self.interval.setCurrentIndex(max(0,self.interval.findData(settings['interval'])))
+        self.interval.setToolTip('0.5/0.75 秒模式仅用于 Parakeet：每句最多提前复核两次（独立于翻译预译次数），推理繁忙时自动放慢。0.5 秒以句尾后一秒内显示/确认为优化目标，不保证每句达到，也不包含云端翻译；可能增加耗电。原省电档保持不变。保存后下次收音生效。')
         appearance.addRow('预览更新间隔',self.interval)
         self.segmentation=QComboBox()
         for title,value in [('均衡 · 标点与停顿','balanced'),('整句优先 · 更少切分','sentence'),('低延迟 · 更快提交','fast')]:
