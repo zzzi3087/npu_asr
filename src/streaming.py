@@ -7,6 +7,7 @@ import numpy as np
 import onnxruntime as ort
 from segmentation import SentenceAssembler,endpoint_samples,confirmation_wait as normalize_confirmation_wait
 from text_rules import normalized,terminal,complete_text,sentence_boundary,sentence_spans,rule_language,SMALL_NUMBERS,TENS
+from final_delivery import FinalDeliveryGate,forced_delivery
 from audio_gain import DynamicGain,quiet_gain
 from model_manager import model_file
 
@@ -183,7 +184,7 @@ class Timeline:
 
 
 class Recognizer:
-    def __init__(self, engine, emit, quiet=True, interval=1.5, segmentation='balanced',agc=None,gain_provider=None,progressive=False,progressive_limit=2,progressive_interval=1.,confirmation_wait=6.):
+    def __init__(self, engine, emit, quiet=True, interval=1.5, segmentation='balanced',agc=None,gain_provider=None,progressive=False,progressive_limit=2,progressive_interval=1.,confirmation_wait=6.,final_delivery_wait=4.,final_delivery_words=35,final_delivery_enabled=True,final_delivery_clock=None):
         self.engine = engine
         from progressive_captions import StablePrefix
         self.prefix=StablePrefix(progressive_limit,progressive_interval) if progressive else None
@@ -221,6 +222,10 @@ class Recognizer:
         self.timeline = Timeline(self.confirmation_wait)
         self.segmenter = SentenceAssembler(segmentation,language=getattr(engine,'language','English'),max_wait=self.confirmation_wait,
             soft_chunks=not progressive)
+        self.delivery=FinalDeliveryGate(final_delivery_wait,final_delivery_words,final_delivery_enabled,final_delivery_clock)
+        # Latest unstable tail from Timeline.update; it is pending recognized
+        # speech but has not reached SentenceAssembler yet.
+        self.pending_preview=[]
         self.pauses = deque(maxlen=128)
         self.pause_start = None
         self.last_voice_clock = 0
@@ -261,6 +266,62 @@ class Recognizer:
     def commit(self,event):
         self.emit('committed',dict(event,asr_model=getattr(self.engine,'model_id','parakeet'),
             source_language=getattr(self.engine,'language','English')))
+        # Only an actual final segment resets the delivery clock. The pending
+        # tail is re-observed after the caller has updated assembler state.
+        self.delivery.note_committed()
+
+    def pending_text(self):
+        tail=' '.join(word for word,_ in self.pending_preview)
+        return ' '.join(part for part in (self.segmenter.text,tail) if part)
+
+    def force_pending(self,trigger,now_audio):
+        """Commit one bounded prefix of already-recognized pending speech.
+
+        No engine call is made. Chosen words are removed from the assembler and
+        timeline-preview tail, and the preview words are advanced in
+        Timeline.confirmed so a later revision of the same hypothesis cannot
+        publish them twice.
+        """
+        held=list(self.segmenter.words)
+        extra=list(self.pending_preview)
+        entries=[(word.text,word.stamp,word.end) for word in held]
+        entries.extend((word,stamp,None) for word,stamp in extra)
+        if not entries:return False
+        text=' '.join(entry[0] for entry in entries)
+        language=getattr(self.engine,'language','English')
+        part=forced_delivery(text,language,self.delivery.words)
+        if not part:return False
+        # forced_delivery returns a prefix of the exact joined text. Translate
+        # its character cut to whole assembler entries without splitting a word
+        # that this adapter handed to us as one unit.
+        cut=len(part.text);end=0;selected=0
+        for index,(word,_,_) in enumerate(entries):
+            end+=len(word)+(1 if index else 0)
+            if end<=cut:selected=index+1
+        if not selected:selected=1
+        chosen=entries[:selected]
+        held_count=min(selected,len(held))
+        extra_count=selected-held_count
+        chosen_extra=extra[:extra_count]
+        self.segmenter.words=held[held_count:]
+        self.pending_preview=extra[extra_count:]
+        if chosen_extra:
+            self.timeline.confirmed.extend(chosen_extra)
+            self.timeline.confirmed=self.timeline.confirmed[-100:]
+        self.segmenter._text=' '.join(word.text for word in self.segmenter.words)
+        first=chosen[0];last=chosen[-1]
+        start=min(max(0.,first[1]),max(0.,now_audio-.001))
+        finish=last[2] if last[2] is not None else last[1]+.6
+        finish=min(max(start+.001,finish),max(start+.001,now_audio))
+        event={'text':' '.join(entry[0] for entry in chosen),
+            'audio_start_ms':int(start*1000),
+            'audio_end_ms':max(int(start*1000)+1,int(finish*1000)),
+            'uncertain':True,'boundary_reason':'final_delivery_'+trigger,
+            'sentence_id':self.segmenter.sequence}
+        self.segmenter.sequence+=1
+        self.commit(event)
+        self.preview(self.pending_preview)
+        return True
 
     def append(self, block):
         if self.size + len(block) > len(self.storage):
@@ -279,6 +340,9 @@ class Recognizer:
             probability = self.vad(block)
             speech = probability >= .4
         self.speech_run = self.speech_run+1 if speech else 0
+        # Reuse the existing VAD decision: detected onset arms the wall-clock
+        # gate before the first ASR result exists. No extra ASR/VAD/timer.
+        if speech and not self.delivery.speech_active:self.delivery.voice_started()
         if self.gain_provider:
             config=self.gain_provider()
             if config is not self._last_config:self.agc.configure(config);self._last_config=config
@@ -300,6 +364,7 @@ class Recognizer:
                 self.pre.clear()
                 self.append(block)
                 self.last_infer = self.base
+                self.pending_preview=[]
             else:
                 self.pre.append(block.copy())
         else:
@@ -316,6 +381,10 @@ class Recognizer:
             events = self.segmenter.update([],None,self.clock/16000,final=stop,
                 idle=(self.clock-self.last_voice_clock)/16000,pauses=self.pauses)
             for event in events:self.commit(event)
+            # Reset only true idle/stop, never the speech-onset timer between
+            # the first detected voice block and VAD activation.
+            if stop or self.speech_run==0:self.delivery.reset()
+            self.pending_preview=[]
             self.preview([])
             return
         # A repeatedly unchanged, punctuated tail with word timing covering
@@ -327,6 +396,12 @@ class Recognizer:
         due_at=self.last_infer+self.refresh_samples()
         if self.confirmation_due is not None:due_at=min(due_at,self.confirmation_due)
         due = self.size >= (8000 if self.low_latency else 16000) and self.clock>=due_at and self.silence<2560
+        # Existing polls can flush a genuinely unpublished tail without a new
+        # ASR generation and without starting another expensive inference.
+        trigger=self.delivery.trigger(self.pending_text())
+        if trigger and not stop:
+            self.force_pending(trigger,self.clock/16000)
+            return
         if not final and not due:
             return
         if len(self.audio) > self.engine.max_samples:
@@ -366,11 +441,18 @@ class Recognizer:
         self.last_infer = self.clock
         new, preview = self.timeline.update(result['words'], self.base/16000, self.clock/16000, final,
             language=getattr(self.engine,'language','English'))
+        self.pending_preview=preview
         hypothesis,ends=timed_hypothesis(result,self.base/16000)
         events = self.segmenter.update(new,hypothesis,self.clock/16000,uncertain=self.timeline.last_forced,
             final=stop,acoustic_end=final,idle=(self.clock-self.last_voice_clock)/16000,pauses=self.pauses,ends=ends,
             agreed_through=self.timeline.agreed_through)
         for event in events:self.commit(event)
+        # The deadline stays expired through blocking inference and fires now
+        # that the worker can process the available result.
+        trigger=self.delivery.trigger(self.pending_text())
+        if trigger:
+            self.force_pending(trigger,self.clock/16000)
+        preview=self.pending_preview
         text=' '.join(part for part in (self.segmenter.text,' '.join(w for w,_ in preview)) if part)
         if self.prefix and not stop:
             start=self.segmenter.words[0].stamp if self.segmenter.words else preview[0][1] if preview else self.clock/16000
@@ -383,7 +465,13 @@ class Recognizer:
             self.emit('metrics', {'infer_ms': result['infer_ms'], 'audio_seconds': len(self.audio)/16000,
                                 'cpu_ms': result.get('cpu_ms', 0),'refresh_interval_ms':self.refresh_samples()/16,
                                 **self.agc.metrics()})
-        if final:self.reset()
+        if final:
+            # An endpoint must not reset away a word-gated tail. Later polls
+            # drain normally; a final poll may not get another poll.
+            for _ in range(64):
+                trigger=self.delivery.trigger(self.pending_text())
+                if not trigger or not self.force_pending(trigger,self.clock/16000):break
+            self.reset()
         elif self.size>=192000 and self.timeline.confirmed:
             # Retain at least six seconds and 0.8 s before the latest confirmed
             # word. Only confirmed audio can leave the inference window.
@@ -412,3 +500,5 @@ class Recognizer:
         self.stable_voice=-1
         self.confirmation_due=None
         self.timeline = Timeline(self.confirmation_wait)
+        self.delivery.reset()
+        self.pending_preview=[]

@@ -52,7 +52,7 @@ class Engine:
 
 def replay(legacy=False):
  engine=Engine();events=[]
- recognizer=streaming.Recognizer(engine,lambda k,v:events.append((k,dict(v,clock=recognizer.clock/16000))))
+ recognizer=streaming.Recognizer(engine,lambda k,v:events.append((k,dict(v,clock=recognizer.clock/16000))),final_delivery_enabled=False)
  if legacy:recognizer.timeline.sentence_prefix=lambda current,previous,end,stable,language:stable
  for _ in range(220):recognizer.push(np.full(512,.01,np.float32));recognizer.poll()
  commits=[v for k,v in events if k=='committed']
@@ -79,7 +79,7 @@ for wait,expected in ((.5,True),(6.,False)):
  assembler=SentenceAssembler(max_wait=wait)
  hypothesis=words('The energy is approximately. One hundred GeV.',.2)
  assert not assembler.update(hypothesis,hypothesis,2),events
-engine=Engine();recognizer=streaming.Recognizer(engine,lambda *_:None,confirmation_wait=.5)
+engine=Engine();recognizer=streaming.Recognizer(engine,lambda *_:None,confirmation_wait=.5,final_delivery_enabled=False)
 recognizer.reset();assert recognizer.timeline.max_wait==recognizer.segmenter.max_wait==.5
 
 # Already agreed content must not wait another cycle just because the period
@@ -95,7 +95,7 @@ class LatePeriodEngine:
 
 def late_period_replay(legacy):
  engine=LatePeriodEngine();events=[]
- recognizer=streaming.Recognizer(engine,lambda k,v:events.append((k,dict(v,clock=recognizer.clock/16000))),progressive=True)
+ recognizer=streaming.Recognizer(engine,lambda k,v:events.append((k,dict(v,clock=recognizer.clock/16000))),progressive=True,final_delivery_enabled=False)
  if legacy:
   update=recognizer.segmenter.update
   def legacy_update(*args,**kwargs):

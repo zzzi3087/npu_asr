@@ -55,7 +55,7 @@ class Engine:
 for model,cls in [('parakeet',streaming.Recognizer),('parakeet-v3',streaming.Recognizer),('qwen3-asr-1.7b',qwen_streaming.QwenRecognizer),('mega-asr',qwen_streaming.QwenRecognizer)]:
     calls=[]
     for enabled in (False,True):
-        events=[];engine=Engine(model);r=cls(engine,lambda k,v:events.append((k,v)),progressive=enabled)
+        events=[];engine=Engine(model);r=cls(engine,lambda k,v:events.append((k,v)),progressive=enabled,final_delivery_enabled=False)
         for _ in range(240):r.push(np.full(512,.01,np.float32));r.poll()
         partials=[v for k,v in events if k=='provisional'];assert bool(partials)==enabled,(model,partials)
         assert sum(v.get('translate',False) for v in partials)==int(enabled),(model,partials)

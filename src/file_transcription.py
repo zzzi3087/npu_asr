@@ -38,8 +38,11 @@ def transcribe_file(engine,job,cancel,emit,recognizer_factory=None):
             if kind in ('committed','metrics'):emit(kind,value)
         # Files need stable final text, rather than repeated live preview decoding.
         interval=999999 if getattr(engine,'streaming_mode','')=='utterance' else 6.
+        # Offline decoding has no meaningful wall clock; preserve the old
+        # conservative boundaries and do not force timed final segments.
         recognizer=factory(engine,result,quiet=options.get('quiet',True),interval=interval,
-            segmentation=options.get('segmentation','balanced'),agc=options.get('agc'))
+            segmentation=options.get('segmentation','balanced'),agc=options.get('agc'),
+            final_delivery_enabled=False)
         with sf.SoundFile(str(pcm)) as audio:
             if audio.samplerate!=16000 or audio.channels!=1:raise RuntimeError('预处理音频格式不正确')
             total=len(audio)
