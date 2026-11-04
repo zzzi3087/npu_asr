@@ -43,7 +43,8 @@ def terminal_candidate_contract():
     with patch.object(streaming, 'Vad', Vad):
         engine = Engine()
         recognizer = streaming.Recognizer(engine, lambda k, v: events.append((k, v)),
-                                         interval=.5, progressive=True, agc={'enabled': False})
+                                         interval=.5, progressive=True, agc={'enabled': False},
+                                         final_delivery_enabled=False)
         for _ in range(48):
             recognizer.push(np.full(BLOCK, .01, np.float32))
             recognizer.poll()
@@ -130,7 +131,8 @@ def simulate(interval, phase, cost, continuous):
     # measured elapsed inference time. This does not make zero-cost fake ASR.
     with patch.object(streaming, 'Vad', Vad), patch('time.perf_counter', lambda: state['wall']):
         recognizer = streaming.Recognizer(Engine(), emit, quiet=True, interval=interval,
-                                         progressive=True, agc={'enabled': False})
+                                         progressive=True, agc={'enabled': False},
+                                         final_delivery_enabled=False)
         while state['wall'] < speech_end + 5:
             available = math.floor((state['wall'] + 1e-8) / STEP)
             if available <= state['delivered']:

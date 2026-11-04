@@ -45,7 +45,8 @@ def validate_configuration(value):
         if type(number) not in (int,float) or not math.isfinite(number) or not lo<=number<=hi:
             raise ValueError('数值超出范围：'+key)
         if key!='interval':result[key]=int(number)
-    for key in ('translate','topmost','quiet','show_source','show_translation','close_to_tray','minimize_to_tray','progressive_translation'):
+    for key in ('translate','topmost','quiet','show_source','show_translation','close_to_tray','minimize_to_tray',
+        'progressive_translation','final_delivery_enabled'):
         if type(result[key]) is not bool:raise ValueError('布尔参数无效：'+key)
     if result['interval'] not in (.5,.75,1.,1.5,2.):raise ValueError('预览间隔须为 0.5、0.75、1、1.5 或 2 秒')
     if type(result['progressive_translation_limit']) is not int or not 1<=result['progressive_translation_limit']<=10:
@@ -56,6 +57,12 @@ def validate_configuration(value):
     wait=result['confirmation_wait']
     if type(wait) not in (int,float) or not math.isfinite(wait) or not .5<=wait<=6:
         raise ValueError('Parakeet 字幕确认等待上限须为 0.5–6 秒')
+    delivery_wait=result['final_delivery_wait']
+    if type(delivery_wait) not in (int,float) or not math.isfinite(delivery_wait) or not .5<=delivery_wait<=60:
+        raise ValueError('正式字幕最长等待须为 0.5–60 秒')
+    delivery_words=result['final_delivery_words']
+    if type(delivery_words) is not int or not 1<=delivery_words<=500:
+        raise ValueError('正式字幕待提交词数阈值须为 1–500 的整数')
     if result['segmentation'] not in ('balanced','sentence','fast'):raise ValueError('不支持的分句策略')
     result['typography']=normalize_typography(result['typography'],strict=True)
     if result['asr_model'] not in {ident for _,ident in ASR_MODELS}:raise ValueError('不支持的转录模型')

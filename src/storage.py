@@ -2,6 +2,7 @@
 import csv
 import io
 import json
+import math
 import os
 import sqlite3
 import uuid
@@ -25,13 +26,26 @@ def utc_now():
     return datetime.now(timezone.utc).isoformat(timespec='milliseconds')
 
 
+def final_delivery_enabled(value=True):
+    return value if type(value) is bool else True
+
+
+def final_delivery_wait(value=4.):
+    return float(value) if type(value) in (int,float) and math.isfinite(value) and .5<=value<=60 else 4.
+
+
+def final_delivery_words(value=35):
+    return value if type(value) is int and 1<=value<=500 else 35
+
+
 def default_settings():
     return {'version': 3, 'main_layout_version':2, 'selected_profile': 'deepseek', 'translate': True,
         'show_source':True,'show_translation':True,'progressive_translation':True,'progressive_translation_limit':2,'progressive_translation_interval':1.,
         'close_to_tray':True,'minimize_to_tray':True,
         'asr_model':'parakeet','source_language':'auto','target_language':'简体中文','agc':dict(DEFAULT_AGC),'feature_backend':'numpy','domain_bias':default_domain_bias(),'desktop_captions':default_desktop_captions(),
         'english_size': 24, 'chinese_size': 22, 'opacity': 100, 'topmost': False,
-        'quiet': True, 'interval': 1.5, 'segmentation': 'balanced', 'confirmation_wait':3.,'colors':dict(DEFAULT_COLORS),
+        'quiet': True, 'interval': 1.5, 'segmentation': 'balanced', 'confirmation_wait':3.,
+        'final_delivery_enabled':True,'final_delivery_wait':4.,'final_delivery_words':35,'colors':dict(DEFAULT_COLORS),
         'theme':normalize_theme(), 'saved_themes':[], 'typography':default_typography(), 'microphone_name': '', 'audio_source':normalize_audio_source(), 'profiles': [
             {'id': 'deepseek', 'name': 'DeepSeek', 'protocol': 'openai',
              'base_url': 'https://api.deepseek.com', 'model': 'deepseek-flash',
@@ -69,6 +83,9 @@ def load_settings(directory=DATA):
     defaults['progressive_translation_limit']=preview_limit(defaults.get('progressive_translation_limit'))
     defaults['progressive_translation_interval']=preview_interval(defaults.get('progressive_translation_interval'))
     defaults['confirmation_wait']=confirmation_wait(defaults.get('confirmation_wait'))
+    defaults['final_delivery_enabled']=final_delivery_enabled(defaults.get('final_delivery_enabled'))
+    defaults['final_delivery_wait']=final_delivery_wait(defaults.get('final_delivery_wait'))
+    defaults['final_delivery_words']=final_delivery_words(defaults.get('final_delivery_words'))
     return defaults
 
 
@@ -80,6 +97,9 @@ def save_settings(settings, directory=DATA):
     clean['progressive_translation_limit']=preview_limit(settings.get('progressive_translation_limit'))
     clean['progressive_translation_interval']=preview_interval(settings.get('progressive_translation_interval'))
     clean['confirmation_wait']=confirmation_wait(settings.get('confirmation_wait'))
+    clean['final_delivery_enabled']=final_delivery_enabled(settings.get('final_delivery_enabled'))
+    clean['final_delivery_wait']=final_delivery_wait(settings.get('final_delivery_wait'))
+    clean['final_delivery_words']=final_delivery_words(settings.get('final_delivery_words'))
     clean['colors']=normalize_colors(settings.get('colors'))
     clean['theme']=normalize_theme(settings.get('theme'))
     clean['typography']=normalize_typography(settings.get('typography'))

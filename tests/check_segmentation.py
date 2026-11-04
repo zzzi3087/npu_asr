@@ -109,7 +109,7 @@ def feed(r,seconds,speech):
 latencies={}
 for cls in (streaming.Recognizer,qwen_streaming.QwenRecognizer):
     events=[];engine=Engine('The observations support this conclusion.')
-    r=cls(engine,lambda k,v:events.append((k,dict(v,clock=r.clock/16000))),quiet=True)
+    r=cls(engine,lambda k,v:events.append((k,dict(v,clock=r.clock/16000))),quiet=True,final_delivery_enabled=False)
     feed(r,1.024,True);voice_end=r.clock/16000;feed(r,1.,False)
     assert texts(events)==[engine.text],texts(events)
     delay=next(v['clock'] for k,v in events if k=='committed')-voice_end
@@ -120,7 +120,7 @@ for cls in (streaming.Recognizer,qwen_streaming.QwenRecognizer):
     latencies[cls.__name__]=round(delay,3)
 
     events=[];engine=Engine('The response is')
-    r=cls(engine,lambda k,v:events.append((k,v)),quiet=True)
+    r=cls(engine,lambda k,v:events.append((k,v)),quiet=True,final_delivery_enabled=False)
     feed(r,1.024,True);feed(r,1.,False);assert not texts(events)
     engine.text='consistent with the prediction.'
     feed(r,1.024,True);feed(r,1.,False)
@@ -128,18 +128,18 @@ for cls in (streaming.Recognizer,qwen_streaming.QwenRecognizer):
 
 # Repeated words and last partial text survive stop, including a tiny activation.
 events=[];engine=Engine('The response is')
-r=streaming.Recognizer(engine,lambda k,v:events.append((k,v)))
+r=streaming.Recognizer(engine,lambda k,v:events.append((k,v)),final_delivery_enabled=False)
 feed(r,1.024,True);feed(r,1.,False);feed(r,.064,True);r.poll(stop=True)
 assert texts(events)==['The response is'],texts(events)
 events=[];engine=Engine('The response is')
-r=qwen_streaming.QwenRecognizer(engine,lambda k,v:events.append((k,v)),interval=999999)
+r=qwen_streaming.QwenRecognizer(engine,lambda k,v:events.append((k,v)),interval=999999,final_delivery_enabled=False)
 feed(r,r.hard_limit/16000,True);assert not texts(events)
 engine.text='consistent with theory.';feed(r,1.,True);feed(r,1.,False)
 assert texts(events)==['The response is consistent with theory.'],texts(events)
 assert max(engine.sizes)<=engine.max_samples
 for model in ('qwen3-asr-1.7b','mega-asr'):
     events=[];engine=Engine('The sample is ready. We continue');engine.model_id=model
-    r=qwen_streaming.QwenRecognizer(engine,lambda k,v:events.append((k,v)))
+    r=qwen_streaming.QwenRecognizer(engine,lambda k,v:events.append((k,v)),final_delivery_enabled=False)
     feed(r,6.2,True)
     assert texts(events)==['The sample is ready.'] and r.active
     engine.text='The sample is ready. We continue with measurements.'

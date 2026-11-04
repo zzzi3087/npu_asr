@@ -4,12 +4,13 @@ import numpy as np
 from streaming import Vad,quiet_gain
 from audio_gain import DynamicGain
 from segmentation import TextAssembler,endpoint_samples
-from text_rules import join_text
-from text_agreement import TextAgreement
+from text_rules import join_text,normalized
+from text_agreement import TextAgreement,UNITS
+from final_delivery import FinalDeliveryGate,forced_delivery
 
 
 class QwenRecognizer:
-    def __init__(self,engine,emit,quiet=True,interval=1.5,segmentation='balanced',agc=None,gain_provider=None,progressive=False,progressive_limit=2,progressive_interval=1.):
+    def __init__(self,engine,emit,quiet=True,interval=1.5,segmentation='balanced',agc=None,gain_provider=None,progressive=False,progressive_limit=2,progressive_interval=1.,final_delivery_wait=4.,final_delivery_words=35,final_delivery_enabled=True,final_delivery_clock=None):
         self.engine=engine;self.emit=emit;self.quiet=quiet;self.vad=Vad()
         from progressive_captions import StablePrefix
         self.prefix=StablePrefix(progressive_limit,progressive_interval) if progressive else None
@@ -22,6 +23,10 @@ class QwenRecognizer:
         self.hard_limit=min(12*16000,engine.max_samples-16000)
         self.segmenter=TextAssembler(segmentation);self.last_voice_clock=0
         self.agreement=TextAgreement();self.text_end=0.
+        self.delivery=FinalDeliveryGate(final_delivery_wait,final_delivery_words,final_delivery_enabled,final_delivery_clock)
+        # Latest agreement tail. Text-only models can expose all recognized
+        # text here while TextAssembler is still empty.
+        self.gate_preview=''
     def push(self,block):
         probability=self.vad(block*quiet_gain(block,maximum=64.)) if self.quiet else self.vad(block)
         speech=probability>=(.20 if self.active else .32)
@@ -30,11 +35,14 @@ class QwenRecognizer:
             if config is not self._last_config:self.agc.configure(config);self._last_config=config
         normalized=self.agc.process(block,speech)
         self.speech_run=self.speech_run+1 if speech else 0
+        # Existing VAD speech detection arms the wall clock at voice onset.
+        if speech and not self.delivery.speech_active:self.delivery.voice_started()
         if not self.active:
             if self.speech_run>=2:
                 self.active=True;self.base=self.clock-len(self.pre)*512;self.size=0
                 for old in self.pre:self.append(old)
                 self.pre.clear();self.last_infer=self.base;self.append(normalized)
+                self.gate_preview=''
             else:self.pre.append(normalized)
         else:self.append(normalized)
         self.clock+=len(block)
@@ -44,14 +52,69 @@ class QwenRecognizer:
     def append(self,block):
         if self.size+len(block)>len(self.storage):raise RuntimeError('音频积压超过窗口，停止以避免丢音')
         self.storage[self.size:self.size+len(block)]=block;self.size+=len(block)
+    def commit(self,event):
+        self.emit('committed',dict(event,asr_model=self.engine.model_id))
+        # Only a real final segment resets the monotonic delivery clock.
+        self.delivery.note_committed()
+    def pending_text(self):
+        return join_text(self.segmenter.text,self.gate_preview.strip())
+    def force_pending(self,trigger):
+        """Promote a bounded prefix from existing text; never call inference."""
+        held=self.segmenter.text or ''
+        preview=self.gate_preview or ''
+        combined=join_text(held,preview.strip())
+        if not combined:return False
+        language=self.segmenter.language or (self.latest or {}).get('language','auto')
+        part=forced_delivery(combined,language,self.delivery.words)
+        if not part:return False
+        audio_end=max(self.base+4000,self.clock-self.silence)/16000
+        audio_start=self.segmenter.start if held else max(self.text_end,self.base/16000)
+        audio_start=min(max(self.base/16000,audio_start),max(self.base/16000,audio_end))
+        cut=len(part.text);total=max(1,len(combined))
+        finish=audio_start+max(0.,audio_end-audio_start)*cut/total
+        finish=min(audio_end,max(audio_start+.001,finish))
+        event={'text':part.text,'audio_start_ms':int(audio_start*1000),
+            'audio_end_ms':max(int(audio_start*1000)+1,int(finish*1000)),
+            'approximate_timestamps':True,'source_language':language or 'auto',
+            'boundary_reason':'final_delivery_'+trigger,'uncertain':True,
+            'sentence_id':self.segmenter.sequence}
+        self.segmenter.sequence+=1
+        self.text_end=finish
+        if held and len(part.text)<=len(held):
+            # The cut stays inside already-confirmed text; keep the remainder
+            # in the assembler and leave the agreement tail untouched.
+            self.segmenter.text=held[len(part.text):].lstrip()
+            self.gate_preview=preview
+        else:
+            if held and part.text.startswith(held):
+                forced_preview=part.text[len(held):].lstrip()
+            else:
+                forced_preview=part.text
+            self.segmenter.text='';self.gate_preview=part.tail
+            # Advance the agreement cursor over the promoted preview prefix.
+            # Later rolling revisions can no longer publish those words again.
+            keys=[normalized(match.group()) for match in UNITS.finditer(forced_preview)]
+            if keys and not (self.agreement.confirmed and self.agreement.confirmed[-len(keys):]==keys):
+                self.agreement.confirmed.extend(keys)
+        self.segmenter.start=finish;self.segmenter.end=audio_end
+        self.commit(event)
+        return True
     def poll(self,stop=False):
         if not self.active:
             for event in self.segmenter.update(now=self.clock/16000,idle=(self.clock-self.last_voice_clock)/16000,final=stop):
-                self.emit('committed',dict(event,asr_model=self.engine.model_id))
+                self.commit(event)
+            if stop or self.speech_run==0:self.delivery.reset()
+            self.gate_preview=''
             self.preview('')
             return
         final=stop or self.silence>=self.silence_limit or self.size>=self.hard_limit
         due=self.size>=32000 and self.clock-self.last_infer>=self.interval_samples and self.silence<2560
+        # Flush an already-recognized tail on an ordinary poll, without a new
+        # generation and without starting inference.
+        trigger=self.delivery.trigger(self.pending_text())
+        if trigger and not stop:
+            self.force_pending(trigger);self.preview(self.gate_preview)
+            return
         if not final and not due:return
         if self.size<4000:
             if final:
@@ -75,14 +138,24 @@ class QwenRecognizer:
             for event in self.segmenter.update(confirmed,start,finish,now=self.clock/16000,
                     idle=self.silence/16000,final=stop,language=result.get('language','auto'),
                     window_limit=final and not stop and self.silence<self.silence_limit):
-                self.emit('committed',dict(event,asr_model=self.engine.model_id))
+                self.commit(event)
+        self.gate_preview=preview
+        trigger=self.delivery.trigger(self.pending_text())
+        if trigger:
+            self.force_pending(trigger)
+            preview=self.gate_preview
         if self.prefix and not stop:
             start=self.segmenter.start if self.segmenter.text else max(self.text_end,self.base/16000)
             value=self.prefix.offer(join_text(self.segmenter.text,preview),self.segmenter.sequence,
                 self.clock/16000,start,result.get('language','auto'))
             if value:self.emit('provisional',value)
         self.preview(preview)
-        if final:self.reset()
+        if final:
+            # Do not discard a word-gated remaining tail at the endpoint.
+            for _ in range(64):
+                trigger=self.delivery.trigger(self.pending_text())
+                if not trigger or not self.force_pending(trigger):break
+            self.reset()
     def preview(self,text):
         text=join_text(self.segmenter.text,text.strip())
         if text!=self.last_preview:
@@ -91,3 +164,4 @@ class QwenRecognizer:
         self.size=0;self.active=False;self.silence=0;self.speech_run=0;self.latest=None;self.latest_size=0
         self.agreement=TextAgreement()
         self.pre.clear();self.preview('')
+        self.delivery.reset();self.gate_preview=''

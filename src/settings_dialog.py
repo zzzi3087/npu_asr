@@ -5,7 +5,7 @@ from PySide6.QtCore import Signal, QUrl, Qt, QThread,QEvent
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (QDialog,QVBoxLayout,QHBoxLayout,QFormLayout,QWidget,
     QComboBox,QLineEdit,QPlainTextEdit,QLabel,QPushButton,QCheckBox,QSpinBox,QDoubleSpinBox,QDialogButtonBox,QMessageBox,QFileDialog,QScrollArea,QSizePolicy,QAbstractSpinBox)
-from storage import DATA, save_settings
+from storage import DATA, save_settings, final_delivery_enabled, final_delivery_wait, final_delivery_words
 from translation import get_key,save_key,validate_profile,endpoint
 from theme_editor import ThemeEditor
 from typography_editor import TypographyEditor
@@ -221,6 +221,26 @@ class SettingsDialog(QDialog):
         self.confirmation_wait.setValue(settings.get('confirmation_wait',3.))
         self.confirmation_wait.setToolTip('仅实时 Parakeet v2/v3：默认 3 秒。稳定句子提前提交；降低会更早采用仍可能修正的词，并标记边界待核。是等待目标，不包含识别刷新、推理和翻译耗时；没有可靠句界时仍会保护未完成短语。保存后下次收音生效。')
         appearance.addRow('Parakeet 字幕确认等待上限',self.confirmation_wait)
+        self.final_delivery=QCheckBox('正式字幕强制提交')
+        self.final_delivery.setChecked(final_delivery_enabled(settings.get('final_delivery_enabled',True)))
+        self.final_delivery.setToolTip('对所有实时模型生效。启用后，已说出或已识别但尚未提交的内容按下面两个阈值强制形成正式字幕；任一严格超过即提交。阈值是触发条件，不是单条字幕长度硬上限；完整句末标点仍优先。临时字幕和预译不会因此重置。保存后下次收音生效。')
+        appearance.addRow(self.final_delivery)
+        self.final_delivery_wait=QDoubleSpinBox();self.final_delivery_wait.setRange(.5,60.)
+        self.final_delivery_wait.setSingleStep(.5);self.final_delivery_wait.setDecimals(1)
+        self.final_delivery_wait.setValue(final_delivery_wait(settings.get('final_delivery_wait',4.)))
+        self.final_delivery_wait.setToolTip('默认 4 秒。计时从检测到说话开始；仅正式提交会重置计时。需已有可提交文本才会触发；持续 ASR 推理可能延后实际提交。范围 0.5–60 秒。')
+        appearance.addRow('最长等待（秒）',self.final_delivery_wait)
+        self.final_delivery_words=QSpinBox();self.final_delivery_words.setRange(1,500)
+        self.final_delivery_words.setValue(final_delivery_words(settings.get('final_delivery_words',35)))
+        self.final_delivery_words.setToolTip('默认 35。已识别但尚未提交的英文词数严格超过该阈值即强制提交。阈值是触发条件，不是正式字幕长度上限；完整句末标点仍优先，句子可以超过该词数。按英文词计，不按字母或子词；缩写与连字符复合词计 1 个；中文、泰文等无空格文本按保守词法片段计数，不把单个字符计作英文词，计时阈值仍照常生效。范围 1–500。')
+        appearance.addRow('待提交词数阈值',self.final_delivery_words)
+        self.final_delivery.toggled.connect(self.final_delivery_wait.setEnabled)
+        self.final_delivery.toggled.connect(self.final_delivery_words.setEnabled)
+        self.final_delivery_wait.setEnabled(self.final_delivery.isChecked())
+        self.final_delivery_words.setEnabled(self.final_delivery.isChecked())
+        final_note=QLabel('仅统计已说出/已识别但尚未提交的内容：先按句子标点，其次逗号等从句标点，最后按词法边界提交。等待或词数任一严格超过阈值即触发；词数阈值不是字幕长度上限，完整句末标点仍优先。持续 ASR 推理可能延后实际等待。词数按英文词计，缩写和连字符复合词计 1 个；中文、泰文等无空格文本按保守词法片段计数，不把单个字符计作英文词，计时阈值照常生效。')
+        final_note.setWordWrap(True);final_note.setObjectName('muted')
+        appearance.addRow(final_note)
         agc=normalize_agc(settings.get('agc'))
         self.agc_enabled=QCheckBox('自动动态增益');self.agc_enabled.setChecked(agc['enabled'])
         gain_form.addRow(self.agc_enabled)
@@ -450,6 +470,9 @@ class SettingsDialog(QDialog):
             opacity=self.opacity.value(),topmost=self.topmost.isChecked(),quiet=self.quiet.isChecked(),
             interval=self.interval.currentData(),segmentation=self.segmentation.currentData(),
             confirmation_wait=self.confirmation_wait.value(),
+            final_delivery_enabled=self.final_delivery.isChecked(),
+            final_delivery_wait=self.final_delivery_wait.value(),
+            final_delivery_words=self.final_delivery_words.value(),
             colors=self.theme_editor.validated_colors(),theme=dict(self.theme_editor.options),
             saved_themes=copy.deepcopy(self.theme_editor.saved_themes))
         return result
@@ -478,6 +501,11 @@ class SettingsDialog(QDialog):
         self.interval.setCurrentIndex(max(0,self.interval.findData(settings['interval'])))
         self.segmentation.setCurrentIndex(self.segmentation.findData(settings['segmentation']))
         self.confirmation_wait.setValue(settings.get('confirmation_wait',3.))
+        self.final_delivery.setChecked(final_delivery_enabled(settings.get('final_delivery_enabled',True)))
+        self.final_delivery_wait.setValue(final_delivery_wait(settings.get('final_delivery_wait',4.)))
+        self.final_delivery_words.setValue(final_delivery_words(settings.get('final_delivery_words',35)))
+        self.final_delivery_wait.setEnabled(self.final_delivery.isChecked())
+        self.final_delivery_words.setEnabled(self.final_delivery.isChecked())
         self.asr_model.blockSignals(True)
         self.asr_model.setCurrentIndex(self.asr_model.findData(settings.get('asr_model','parakeet')))
         self.source_language.clear()

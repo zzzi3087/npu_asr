@@ -69,7 +69,7 @@ def feed(r,blocks,voice):
 delays=[]
 for timed,stale,incomplete in [(True,False,False),(False,False,False),(True,True,False),(True,False,True)]:
     events=[];e=Engine('The sample is' if incomplete else 'The sample is ready.',timed,stale)
-    r=streaming.Recognizer(e,lambda k,v:events.append((k,v,r.clock)),interval=1.)
+    r=streaming.Recognizer(e,lambda k,v:events.append((k,v,r.clock)),interval=1.,final_delivery_enabled=False)
     feed(r,64,True);end=r.clock;feed(r,32,False)
     committed=[clock for k,v,clock in events if k=='committed']
     if incomplete:assert not committed
