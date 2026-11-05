@@ -28,11 +28,12 @@ from caption_visibility import caption_visibility
 from tray_controller import TrayController
 from file_queue import FileQueue,LABELS as FILE_LABELS
 from progressive_captions import DraftCaptions
+from caption_view import CaptionView,row_identity
 from PySide6.QtGui import QIcon
 
 from theme import STYLE,apply_theme,normalize_colors,effective_colors,normalize_theme
 from system_theme import SystemTheme
-from typography import normalize_typography,make_font,render_captions
+from typography import normalize_typography,make_font
 
 
 def local_date(value, pattern='MM月dd日  HH:mm'):
@@ -75,10 +76,15 @@ class Window(QMainWindow):
         self.history_menu_sid=None
         self.source_choices={self.settings['audio_source']['kind']:dict(self.settings['audio_source'])}
         self.session_limit=self.row_limit=100
+        self._sessions_refresh_timer=QTimer(self)
+        self._sessions_refresh_timer.setSingleShot(True)
+        self._sessions_refresh_timer.setInterval(300)
+        self._sessions_refresh_timer.timeout.connect(self.refresh_sessions)
         self.render_pending=False
         self.workbench_dirty=False
         self.last_settings_page=1
         self._caption_key=self._partial_key=self._empty_key=None
+        self._caption_session=None
         self.dialog=None
         self.desktop=DesktopCaptions(self.settings.get('desktop_captions'))
         self.desktop.position_changed.connect(self.desktop_position_changed)
@@ -257,8 +263,9 @@ class Window(QMainWindow):
             control.setToolTip('同时控制主页历史字幕和桌面字幕；缺少译文时自动保留原文。')
             control.toggled.connect(self.change_caption_visibility);display_row.addWidget(control)
         self.sync_caption_visibility();main.addWidget(self.caption_controls)
-        self.browser=QTextBrowser()
+        self.browser=CaptionView()
         self.browser.setOpenExternalLinks(False)
+        self.browser.followChanged.connect(self.on_caption_follow_changed)
         main.addWidget(self.browser,1)
         bottom=QWidget()
         bottom_layout=QVBoxLayout(bottom)
@@ -586,6 +593,16 @@ class Window(QMainWindow):
         self.more_sessions.setVisible(len(records)>=self.session_limit)
         self.retry_button.setEnabled(bool(self.view_session))
 
+    def schedule_sessions_refresh(self):
+        if not self._sessions_refresh_timer.isActive():
+            self._sessions_refresh_timer.start()
+
+    def on_caption_follow_changed(self,follow):
+        if self.closing:return
+        if follow:
+            if self.row_limit!=100:self.row_limit=100
+            self.render()
+
     def sync_history_selection(self):
         for item,row in self.history_rows.values():row.set_selected(item.isSelected())
 
@@ -606,6 +623,7 @@ class Window(QMainWindow):
 
     def load_more_rows(self):
         self.row_limit+=100
+        self.browser.request_rebase()
         self.render()
 
     def select_session(self,item):
@@ -662,7 +680,7 @@ class Window(QMainWindow):
             metadata.setdefault('source_language','English' if metadata['asr_model']=='parakeet' else job['options'].get('source_language','auto'))
             self.history.add(sid,value['text'],value.get('audio_start_ms',0),value.get('audio_end_ms',1000),
                 'queued' if self.settings['translate'] else 'disabled',value.get('uncertain',False),metadata)
-            self.pump(sid);self.refresh_sessions();self.render()
+            self.pump(sid);self.schedule_sessions_refresh();self.render()
         elif kind=='metrics':
             self.diagnostics.setText(f'NPU {value["infer_ms"]:.0f} ms · 本地文件')
         elif kind=='progress':
@@ -785,7 +803,7 @@ class Window(QMainWindow):
                 if cancelled:self.drafts.translated(draft['id'],'',False)
                 if not self.settings['translate']:self.drafts.finish(ident)
             self.pump(self.current_session)
-            self.refresh_sessions()
+            self.schedule_sessions_refresh()
             self.render()
         elif kind=='metrics':
             level=(f' · {value["input_dbfs"]:.0f} → {value["output_dbfs"]:.0f} dBFS' if 'input_dbfs' in value else '')
@@ -1064,6 +1082,8 @@ class Window(QMainWindow):
         if not session:
             self.refresh_translation_warning()
             self._caption_key=None
+            self._caption_session=None
+            self.browser.clear_state()
             self.title.setText('实时字幕')
             self.subtitle.setText('本地 NPU 转录，云端多语言翻译')
             self.subtitle.setToolTip('')
@@ -1081,21 +1101,41 @@ class Window(QMainWindow):
         self.title.setText('实时字幕' if sid==self.current_session else '历史字幕')
         self.subtitle.setText(session['title']+'  ·  '+local_date(session['created_at'],'yyyy年MM月dd日 HH:mm'))
         self.subtitle.setToolTip(self.subtitle.text())
-        rows=self.history.rows(sid,self.row_limit)
-        self.refresh_translation_warning(rows)
         count=self.history.db.execute('SELECT COUNT(*) FROM segments WHERE session_id=?',(sid,)).fetchone()[0]
         self.segment_count.setText(f'{count} 段 · 自动保存')
-        self.more_rows.setVisible(count>len(rows))
-        rows=self.drafts.rows(sid,rows)
-        bar=self.browser.verticalScrollBar()
-        position=bar.value()
-        follow=position>=bar.maximum()-30
-        key=(sid,tuple(tuple(row.get(k) for k in ('id','en','zh','start_ms','uncertain','timing','status','error','provisional')) for row in rows),
-            tuple(sorted(c.items())),repr(self.appearance),caption_visibility(self.settings))
-        if key!=self._caption_key:
-            self._caption_key=key
-            render_captions(self.browser,rows,c,dict(self.settings,**self.appearance))
-        bar.setValue(bar.maximum() if follow else position)
+        reset=sid!=self._caption_session
+        rebase=self.browser.consume_rebase()
+        if reset or self.browser.following or rebase:
+            tail_rows=self.history.rows(sid,self.row_limit)
+            self.refresh_translation_warning(tail_rows)
+            self.more_rows.setVisible(count>len(tail_rows))
+            rows=self.drafts.rows(sid,tail_rows)
+        else:
+            # A paused reader keeps a snapshot. Refresh only rows already shown;
+            # new tail records stay in the database until follow resumes.  Do
+            # not query the growing tail on every live update.
+            visible=self.browser.visible_rows()
+            visible_keys={row_identity(row) for row in visible}
+            visible_ids={row.get('id'):row_identity(row) for row in visible if row.get('id')}
+            logical_to_final={logical:ident for (session,ident),logical in self.drafts.logical_ids.items() if session==sid}
+            idents=[]
+            for row in visible:
+                ident=row.get('id')
+                if ident and not str(ident).startswith('draft:'):idents.append(ident)
+                final=logical_to_final.get(row.get('logical_id'))
+                if final:idents.append(final)
+            pinned=self.drafts.rows(sid,self.history.rows_by_ids(sid,idents))
+            by_key={}
+            for row in pinned:
+                key=row_identity(row)
+                if key not in visible_keys:key=visible_ids.get(row.get('id'),key)
+                if key in visible_keys:by_key[key]=row
+            rows=[by_key.get(row_identity(row),row) for row in visible]
+            self.refresh_translation_warning(rows)
+            seqs=[row.get('seq') for row in rows if row.get('seq') is not None]
+            if seqs:self.more_rows.setVisible(min(seqs)>1)
+        self._caption_session=sid
+        self.browser.set_captions(rows,c,dict(self.settings,**self.appearance),reset=reset,rebase=rebase)
         self.update_partial()
 
     def changeEvent(self,event):
@@ -1107,6 +1147,7 @@ class Window(QMainWindow):
 
     def closeEvent(self,event):
         if self._closed:event.accept();return
+        self._sessions_refresh_timer.stop()
         if not self._exit_requested and not self.closing and self.settings.get('close_to_tray',True):
             if self.hide_to_tray():event.ignore();return
         inventory=getattr(QApplication.instance(),'_audio_inventory',None)

@@ -75,7 +75,11 @@ class StablePrefix:
 
 
 class DraftCaptions:
-    def __init__(self):self.entries={}
+    def __init__(self):
+        self.entries={}
+        # Keep a stable logical identity after a draft's rotating request id
+        # becomes a final history row.  The view uses this for in-place updates.
+        self.logical_ids={}
 
     def add(self,sid,value):
         key=(sid,value['sentence_id'])
@@ -108,6 +112,7 @@ class DraftCaptions:
             return previous
         while len(self.entries)>=16:self.entries.pop(next(iter(self.entries)))
         row=dict(id='draft:'+uuid.uuid4().hex,session_id=sid,sentence_id=value['sentence_id'],
+            logical_id=f'draft:{sid}:{value["sentence_id"]}',
             en=value['text'],zh='',start_ms=value['audio_start_ms'],end_ms=value['audio_end_ms'],
             status='pending',error='',uncertain=False,timing='approximate',provisional=True,final_id=None)
         row['revisable']=value.get('revisable',False)
@@ -120,6 +125,13 @@ class DraftCaptions:
     def link(self,sid,sentence,ident,text=''):
         row=self.entries.get((sid,sentence))
         if row:
+            # The final row keeps the draft's logical identity even when the
+            # revisable draft itself is removed below.  A paused reader then
+            # replaces the visible draft in place instead of losing it.
+            logical=row.get('logical_id')
+            if logical:
+                self.logical_ids[(sid,ident)]=logical
+                if len(self.logical_ids)>2048:self.logical_ids.pop(next(iter(self.logical_ids)))
             if row.get('revisable') and not row['zh']:
                 self.remove_request(row['id']);return row
             if row.get('revisable') and text:
@@ -152,7 +164,9 @@ class DraftCaptions:
 
     def finish(self,ident):self.entries={k:r for k,r in self.entries.items() if r['final_id']!=ident}
 
-    def discard_session(self,sid):self.entries={k:r for k,r in self.entries.items() if k[0]!=sid}
+    def discard_session(self,sid):
+        self.entries={k:r for k,r in self.entries.items() if k[0]!=sid}
+        self.logical_ids={k:v for k,v in self.logical_ids.items() if k[0]!=sid}
 
     def rows(self,sid,rows):
         entries=[r for r in self.entries.values() if r['session_id']==sid]
@@ -160,10 +174,14 @@ class DraftCaptions:
         output=[]
         for row in rows:
             draft=replacements.get(row['id'])
+            logical=None
             if draft and row['status']!='done' and (draft['zh'] or row['status'] in ('queued','pending')):
                 # Keep durable source/error metadata while showing the prior
                 # readable draft until the full translation succeeds.
                 row=dict(row,en=draft['en'],zh=draft['zh'],provisional=True)
+                logical=draft.get('logical_id')
+            if logical is None:logical=self.logical_ids.get((sid,row['id']))
+            if logical:row=dict(row,logical_id=logical)
             output.append(row)
         output.extend(dict(r) for r in entries if not r['final_id'])
         return output
