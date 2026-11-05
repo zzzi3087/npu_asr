@@ -55,44 +55,105 @@ def make_font(t,kind,size):
     return font
 
 
-def render_captions(browser,rows,colors,settings):
-    t=normalize_typography(settings.get('typography'))
-    doc=browser.document()
-    doc.clear();doc.setDocumentMargin(0)
-    cursor=QTextCursor(doc)
-    cursor.beginEditBlock()
-    first=True
-    def block(text,color,font,line=1.,bottom=0,top=0):
-        nonlocal first
-        fmt=QTextBlockFormat()
-        fmt.setLineHeight(line*100,QTextBlockFormat.LineHeightTypes.ProportionalHeight.value)
-        fmt.setTopMargin(top+(t['padding_y'] if first else 0))
-        fmt.setBottomMargin(bottom)
-        fmt.setLeftMargin(t['padding_x']);fmt.setRightMargin(t['padding_x'])
-        char=QTextCharFormat();char.setFont(font);char.setForeground(QColor(color))
-        if first:cursor.setBlockFormat(fmt);cursor.setCharFormat(char);first=False
-        else:cursor.insertBlock(fmt,char)
-        cursor.insertText(text,char)
-    fonts={kind:make_font(t,kind,settings[kind+'_size']) for kind in ('english','chinese')}
-    meta_font=make_font(t,'ui',max(10,t['ui_size']-2))
-    show_source,show_translation=caption_visibility(settings)
-    for row in rows:
-        source,translation=visible_caption_pair(row['en'],row['zh'],show_source,show_translation)
-        if not source and not translation:continue
+class CaptionFormatter:
+    """Shared row formatter for full and incremental caption rendering."""
+    def __init__(self,colors,settings):
+        self.t=normalize_typography(settings.get('typography'))
+        self.colors=colors
+        self.fonts={kind:make_font(self.t,kind,settings[kind+'_size']) for kind in ('english','chinese')}
+        self.meta_font=make_font(self.t,'ui',max(10,self.t['ui_size']-2))
+        self.show_source,self.show_translation=caption_visibility(settings)
+
+    def insert_row(self,cursor,row,first=False,new_block=False):
+        t=self.t
+        count=0
+        def block(text,color,font,line=1.,bottom=0,top=0):
+            nonlocal count
+            fmt=QTextBlockFormat()
+            fmt.setLineHeight(line*100,QTextBlockFormat.LineHeightTypes.ProportionalHeight.value)
+            fmt.setTopMargin(top+(t['padding_y'] if first and count==0 else 0))
+            fmt.setBottomMargin(bottom)
+            fmt.setLeftMargin(t['padding_x']);fmt.setRightMargin(t['padding_x'])
+            char=QTextCharFormat();char.setFont(font);char.setForeground(QColor(color))
+            if count==0 and not new_block:cursor.setBlockFormat(fmt);cursor.setCharFormat(char)
+            else:cursor.insertBlock(fmt,char)
+            cursor.insertText(text,char)
+            count+=1
+        source,translation=visible_caption_pair(row['en'],row['zh'],self.show_source,self.show_translation)
+        if not source and not translation:return 0
         seconds=max(0,row['start_ms']//1000)
         stamp=f'{seconds//60:02d}:{seconds%60:02d}'
         if row.get('timing')=='approximate':stamp='≈ '+stamp
         if row.get('provisional'):stamp+=' · 临时译文 · 等待确认' if row['zh'] else ' · 临时字幕 · 等待确认'
-        block(stamp,colors['subtitle_meta'],meta_font,bottom=t['meta_gap'])
+        block(stamp,self.colors['subtitle_meta'],self.meta_font,bottom=t['meta_gap'])
         if row['uncertain']:
-            char=QTextCharFormat();char.setFont(meta_font);char.setForeground(QColor(colors['warning']))
+            char=QTextCharFormat();char.setFont(self.meta_font);char.setForeground(QColor(self.colors['warning']))
             cursor.insertText(' · 边界待核',char)
-        if source:block(source,colors['english'],fonts['english'],t['english_line'],
+        if source:block(source,self.colors['english'],self.fonts['english'],t['english_line'],
             t['bilingual_gap'] if translation else t['paragraph_gap'])
-        if translation:block(translation,colors['chinese'],fonts['chinese'],t['chinese_line'],t['paragraph_gap'])
+        if translation:block(translation,self.colors['chinese'],self.fonts['chinese'],t['chinese_line'],t['paragraph_gap'])
+        return count
+
+    def insert_placeholder(self,cursor):
+        t=self.t
+        fmt=QTextBlockFormat()
+        fmt.setLineHeight(100,QTextBlockFormat.LineHeightTypes.ProportionalHeight.value)
+        fmt.setTopMargin(t['padding_y'])
+        fmt.setLeftMargin(t['padding_x']);fmt.setRightMargin(t['padding_x'])
+        char=QTextCharFormat();char.setFont(make_font(t,'ui',t['ui_size']));char.setForeground(QColor(self.colors['muted']))
+        cursor.setBlockFormat(fmt);cursor.setCharFormat(char);cursor.insertText('正在等待确认的语音…',char)
+
+
+def _text_block(doc,first=False):
+    block=doc.firstBlock() if first else doc.lastBlock()
+    step=(lambda b:b.next()) if first else (lambda b:b.previous())
+    while block.isValid() and not block.text() and step(block).isValid():block=step(block)
+    return block
+
+
+def apply_tail_padding(doc,formatter):
+    block=_text_block(doc)
+    if not block.isValid():return
+    cursor=QTextCursor(doc);cursor.setPosition(block.position())
+    fmt=block.blockFormat();fmt.setBottomMargin(formatter.t['padding_y']+formatter.t['paragraph_gap'])
+    cursor.setBlockFormat(fmt)
+
+
+def clear_tail_padding(doc,formatter):
+    block=_text_block(doc)
+    if not block.isValid():return
+    cursor=QTextCursor(doc);cursor.setPosition(block.position())
+    fmt=block.blockFormat();fmt.setBottomMargin(formatter.t['paragraph_gap'])
+    cursor.setBlockFormat(fmt)
+
+
+def apply_head_padding(doc,formatter):
+    block=_text_block(doc,first=True)
+    if not block.isValid():return
+    cursor=QTextCursor(doc);cursor.setPosition(block.position())
+    fmt=block.blockFormat();fmt.setTopMargin(formatter.t['padding_y'] if block.text() else 0)
+    cursor.setBlockFormat(fmt)
+
+
+def render_caption_rows(browser,rows,colors,settings):
+    """Rebuild the whole document; return each row's (first block, count)."""
+    doc=browser.document()
+    doc.clear();doc.setDocumentMargin(0)
+    cursor=QTextCursor(doc)
+    cursor.beginEditBlock()
+    formatter=CaptionFormatter(colors,settings)
+    mapping=[];inserted=0;first=True
+    for row in rows:
+        count=formatter.insert_row(cursor,row,first=first,new_block=inserted>0)
+        mapping.append((inserted,count))
+        inserted+=count
+        if count:first=False
     # Space below the last caption without changing subtitle time or content.
-    if rows:
-        fmt=cursor.blockFormat();fmt.setBottomMargin(t['padding_y']+t['paragraph_gap']);cursor.setBlockFormat(fmt)
-    else:
-        block('正在等待确认的语音…',colors['muted'],make_font(t,'ui',t['ui_size']))
+    if rows:apply_tail_padding(doc,formatter)
+    else:formatter.insert_placeholder(cursor)
     cursor.endEditBlock()
+    return mapping
+
+
+def render_captions(browser,rows,colors,settings):
+    render_caption_rows(browser,rows,colors,settings)

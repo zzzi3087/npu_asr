@@ -203,6 +203,22 @@ class History:
             args.append(limit)
         return [dict(row) for row in self.db.execute(sql,args)]
 
+    def rows_by_ids(self, sid, idents):
+        """Refresh only rows currently visible in a paused reading snapshot."""
+        idents=[ident for ident in dict.fromkeys(idents) if ident]
+        if not idents:return []
+        rows=[]
+        for start in range(0,len(idents),800):
+            chunk=idents[start:start+800]
+            marks=','.join('?'*len(chunk))
+            # id is globally unique; keep session_id out of SQL so SQLite uses
+            # the primary-key lookup instead of scanning segment_session.
+            rows.extend(dict(row) for row in self.db.execute(
+                f'SELECT * FROM segments WHERE id IN ({marks})',chunk))
+        rows=[row for row in rows if row['session_id']==sid]
+        rows.sort(key=lambda row:row['seq'])
+        return rows
+
     def context(self, ident):
         row = self.segment(ident)
         if not row:
