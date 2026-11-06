@@ -205,11 +205,11 @@ class SettingsDialog(QDialog):
         self.quiet.setChecked(settings['quiet'])
         gain_form.addRow(self.quiet)
         self.interval = QComboBox()
-        for title,value in [('低延迟 · 自适应 0.5 秒','0.5'),('快速 · 自适应 0.75 秒','0.75'),('流畅 · 1 秒','1.0'),('省电 · 1.5 秒','1.5'),('低占用 · 2 秒','2.0')]:
+        for title,value in [('目标 0.5 秒 · 自适应','0.5'),('目标 0.75 秒 · 自适应','0.75'),('目标 1 秒','1.0'),('目标 1.5 秒','1.5'),('目标 2 秒','2.0')]:
             self.interval.addItem(title,float(value))
         self.interval.setCurrentIndex(max(0,self.interval.findData(settings['interval'])))
-        self.interval.setToolTip('0.5/0.75 秒模式仅用于 Parakeet：每句最多提前复核两次（独立于翻译预译次数），推理繁忙时自动放慢。0.5 秒以句尾后一秒内显示/确认为优化目标，不保证每句达到，也不包含云端翻译；可能增加耗电。原省电档保持不变。保存后下次收音生效。')
-        appearance.addRow('预览更新间隔',self.interval)
+        self.interval.setToolTip('Parakeet：0.5/0.75 秒会自适应刷新，并在每句最多提前复核两次；其他档位按固定目标刷新。设置是期望节奏，不包含推理和云端翻译耗时，繁忙时会自动放慢。保存后下次收音生效。')
+        appearance.addRow('目标预览间隔',self.interval)
         self.segmentation=QComboBox()
         for title,value in [('均衡 · 标点与停顿','balanced'),('整句优先 · 更少切分','sentence'),('低延迟 · 更快提交','fast')]:
             self.segmentation.addItem(title,value)
@@ -351,14 +351,19 @@ class SettingsDialog(QDialog):
         for value,label,_ in source_languages(model):self.source_language.addItem(label,value)
         self.source_language.setCurrentIndex(self.source_language.findData(current));self.source_language.blockSignals(False)
         parakeet=model in PARAKEET_MODELS
-        for field in (self.interval,self.confirmation_wait):self.appearance.setRowVisible(field,parakeet)
+        self.appearance.setRowVisible(self.interval,True)
+        self.appearance.setRowVisible(self.confirmation_wait,parakeet)
         self.appearance.setRowVisible(self.feature_backend,model=='parakeet')
         self.appearance.setRowVisible(self.feature_note,model=='parakeet')
+        if parakeet:
+            self.interval.setToolTip('Parakeet：0.5/0.75 秒会自适应刷新，并在每句最多提前复核两次；其他档位按固定目标刷新。设置是期望节奏，不包含推理和云端翻译耗时，繁忙时会自动放慢。保存后下次收音生效。')
+        else:
+            self.interval.setToolTip('期望刷新节奏。首个预览需先累积约 3 秒音频，推理耗时另计；之后实际间隔会按单次推理耗时自动放慢，0.5/0.75 秒不保证达到。停顿或停止后重新说话，首个预览重新从约 3 秒音频开始；只有连续长语音才保留放慢。不包含云端翻译。保存后下次收音生效。')
         notes={
             'parakeet':'Parakeet v2 仅支持英语；转录神经网络使用 NPU。',
             'parakeet-v3':'Parakeet v3 自动辨别 25 种欧洲语言，保留标点和词时间戳；语言选项用于分句与翻译提示。转录神经网络使用 NPU。',
-            'qwen3-asr-1.7b':'Qwen 支持多语言；预览至少约 3 秒更新，实际间隔还取决于推理耗时，时间轴为近似值。转录神经网络使用 NPU。',
-            'mega-asr':'Mega 支持多语言与抗噪；预览至少约 3 秒更新，实际间隔还取决于推理耗时，时间轴为近似值。转录神经网络使用 NPU。'}
+            'qwen3-asr-1.7b':'Qwen 支持多语言；首个预览需先累积约 3 秒音频，推理耗时另计。之后按“目标预览间隔”刷新，实际会随推理耗时自动放慢；0.5/0.75 秒不保证达到。时间轴为近似值，转录神经网络使用 NPU。',
+            'mega-asr':'Mega 支持多语言与抗噪；首个预览需先累积约 3 秒音频，推理耗时另计。之后按“目标预览间隔”刷新，实际会随推理耗时自动放慢；0.5/0.75 秒不保证达到。时间轴为近似值，转录神经网络使用 NPU。'}
         self.model_note.setText(notes.get(model,''))
         self.domain_editor.set_model(model)
 

@@ -368,8 +368,11 @@ def test_qwen_window_revision_does_not_duplicate_promoted_prefix():
     tail = original[35:]
     engine = SequenceEngine(' '.join(original), ' '.join(revised + tail))
     events = []
+    # This scenario needs exactly two decoder passes; the interval is kept
+    # above the 3.2 s feed window so faster preview cadence does not add calls
+    # that would obscure the revision/deduplication contract under test.
     recognizer = qwen_streaming.QwenRecognizer(engine,
-        lambda kind, value: events.append((kind, value)), quiet=True, interval=1.5,
+        lambda kind, value: events.append((kind, value)), quiet=True, interval=3.2,
         agc={'enabled': False}, final_delivery_clock=clock)
     feed(recognizer, 3.2, True)
     first = committed(events)
@@ -390,6 +393,44 @@ def test_qwen_window_revision_does_not_duplicate_promoted_prefix():
         row_words = row['text'].split()
         assert not any(row_words[index:index + 6] == promoted_words[:6]
                        for index in range(max(0, len(row_words) - 5)))
+
+
+def test_qwen_fast_revision_preserves_tail():
+    original = ['word' + str(index) for index in range(40)]
+    # Insertions and a substitution keep the words immediately before the
+    # unpublished tail intact, so the tail contract is independently visible
+    # from the adversarial deletion case above.
+    revised = (['inserted0', 'inserted1'] + original[:11]
+               + ['revised'] + original[12:35])
+    tail = original[35:]
+    extra = ['extra0', 'extra1', 'extra2']
+    tail_text = ' '.join(tail + extra)
+    for interval in (1.5, .5):
+        clock = Clock()
+        engine = SequenceEngine(' '.join(original),
+            ' '.join(revised + tail), ' '.join(revised + tail + extra))
+        events = []
+        recognizer = qwen_streaming.QwenRecognizer(engine,
+            lambda kind, value: events.append((kind, value)), quiet=True, interval=interval,
+            agc={'enabled': False}, final_delivery_clock=clock)
+        feed(recognizer, 3.2, True)
+        first = committed(events)
+        assert engine.calls == 1 and len(first) == 1 and len(first[0]['text'].split()) == 35, (interval, engine.calls, first)
+        forced_text = first[0]['text']
+        feed(recognizer, 3.4, True)
+        assert engine.calls > 2, (interval, engine.calls)
+        recognizer.poll(stop=True)
+        rows = committed(events)
+        later = rows[1:]
+        assert all(forced_text not in row['text'] for row in later), (interval, later)
+        # Faster decoding must not publish the promoted prefix twice or lose
+        # the growing tail.
+        assert ' '.join(row['text'] for row in later).strip() == tail_text, (interval, later)
+        promoted_words = forced_text.split()
+        for row in later:
+            row_words = row['text'].split()
+            assert not any(row_words[index:index + 6] == promoted_words[:6]
+                           for index in range(max(0, len(row_words) - 5))), (interval, row)
 
 
 TIMINGS = {}
@@ -514,6 +555,7 @@ if __name__ == '__main__':
     test_parakeet_word_gate_drains_same_generation()
     test_qwen_preview_only_and_time_gate()
     test_qwen_window_revision_does_not_duplicate_promoted_prefix()
+    test_qwen_fast_revision_preserves_tail()
     test_blocking_inference_limitation()
     test_reset_and_window()
     print(json.dumps(dict(word_contract=True, unicode_marks_and_dense_runs=True,
@@ -521,6 +563,7 @@ if __name__ == '__main__':
         sentence_comma_word_boundaries=True, causal_4s_and_2s_timing=True,
         provisional_draft_replaced=True, parakeet_time_gate=True,
         parakeet_word_gate_same_generation=True, qwen_preview_only=True,
-        qwen_window_revision_no_duplicate=True, blocking_inference_observed_at_7_5s=True,
+        qwen_window_revision_no_duplicate=True, qwen_fast_revision_tail=True,
+        blocking_inference_observed_at_7_5s=True,
         reset_and_window=True, first_commit_seconds=TIMINGS,
         no_extra_asr=True, no_api_microphone_or_model=True)))

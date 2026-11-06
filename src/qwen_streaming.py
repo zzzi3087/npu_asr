@@ -1,5 +1,7 @@
 """Bounded near-real-time utterances; no invented word alignment or NN fallback."""
 from collections import deque
+import math
+import time
 import numpy as np
 from streaming import Vad,quiet_gain
 from audio_gain import DynamicGain
@@ -7,6 +9,37 @@ from segmentation import TextAssembler,endpoint_samples
 from text_rules import join_text,normalized
 from text_agreement import TextAgreement,UNITS
 from final_delivery import FinalDeliveryGate,forced_delivery
+
+_PREVIEW_DUTY=.35  # scheduling target only; backlog/finalization can exceed it
+_FIRST_AUDIO_SECONDS=3.
+_IDLE_COST_RESET_SECONDS=1.
+_UI_MIN_INTERVAL_SECONDS=.5
+_UI_DEFAULT_INTERVAL_SECONDS=1.5
+_MAX_INTERVAL_SECONDS=999999.
+_MAX_INFERENCE_COST_SECONDS=3600.
+
+def _finite_positive(value,maximum=None):
+    try:value=float(value)
+    except (TypeError,ValueError,OverflowError):return 0.
+    if not math.isfinite(value) or value<=0:return 0.
+    return min(value,maximum) if maximum is not None else value
+
+def _requested_samples(interval):
+    try:value=float(interval)
+    except (TypeError,ValueError,OverflowError):value=_UI_DEFAULT_INTERVAL_SECONDS
+    if not math.isfinite(value):value=_UI_DEFAULT_INTERVAL_SECONDS
+    value=min(_MAX_INTERVAL_SECONDS,max(_UI_MIN_INTERVAL_SECONDS,value))
+    return int(value*16000)
+
+def _measured_inference_cost(begun,result):
+    try:elapsed=time.perf_counter()-begun
+    except Exception:elapsed=0.
+    reported=_finite_positive(result.get('infer_ms',0),_MAX_INFERENCE_COST_SECONDS*1000)/1000 if isinstance(result,dict) else 0.
+    return max(_finite_positive(elapsed,_MAX_INFERENCE_COST_SECONDS),reported)
+
+def _adaptive_refresh_samples(requested,inference_cost):
+    cost=_finite_positive(inference_cost,_MAX_INFERENCE_COST_SECONDS)
+    return max(int(requested),int(cost/_PREVIEW_DUTY*16000))
 
 
 class QwenRecognizer:
@@ -18,7 +51,12 @@ class QwenRecognizer:
         self.clock=0;self.base=0;self.size=0;self.active=False;self.silence=0;self.speech_run=0
         self.pre=deque(maxlen=16);self.storage=np.empty(engine.max_samples+160000,np.float32)
         self.last_infer=0;self.last_preview='';self.latest=None;self.latest_size=0
-        self.interval_samples=int(max(3.,interval)*16000)
+        self.interval_samples=_requested_samples(interval)
+        self.first_audio_samples=int(_FIRST_AUDIO_SECONDS*16000)
+        self.inference_cost=0.
+        self.first_infer_done=False
+        self.last_infer_size=0
+        self.inactive_gap=0.
         self.silence_limit=endpoint_samples(segmentation,quiet)
         self.hard_limit=min(12*16000,engine.max_samples-16000)
         self.segmenter=TextAssembler(segmentation);self.last_voice_clock=0
@@ -37,12 +75,20 @@ class QwenRecognizer:
         self.speech_run=self.speech_run+1 if speech else 0
         # Existing VAD speech detection arms the wall clock at voice onset.
         if speech and not self.delivery.speech_active:self.delivery.voice_started()
+        if speech and not self.active:
+            self.inactive_gap=max(self.inactive_gap,(self.clock-self.last_voice_clock)/16000)
         if not self.active:
             if self.speech_run>=2:
+                # A real idle gap starts a genuinely new utterance: inherited
+                # cost must not delay its first 3 s context. This is bounded
+                # audio-clock input, not a timer or extra inference.
+                if self.inactive_gap>=_IDLE_COST_RESET_SECONDS:
+                    self.inference_cost=0.
                 self.active=True;self.base=self.clock-len(self.pre)*512;self.size=0
                 for old in self.pre:self.append(old)
                 self.pre.clear();self.last_infer=self.base;self.append(normalized)
-                self.gate_preview=''
+                self.gate_preview='';self.first_infer_done=False;self.last_infer_size=0
+                self.inactive_gap=0.
             else:self.pre.append(normalized)
         else:self.append(normalized)
         self.clock+=len(block)
@@ -99,6 +145,11 @@ class QwenRecognizer:
         self.segmenter.start=finish;self.segmenter.end=audio_end
         self.commit(event)
         return True
+    def refresh_samples(self):
+        # Requested cadence is a floor; measured full-inference wall time backs
+        # off subsequent previews. Cost survives only uninterrupted hard-window
+        # continuation; natural stop/endpoint and a real idle gap clear it.
+        return _adaptive_refresh_samples(self.interval_samples,self.inference_cost)
     def poll(self,stop=False):
         if not self.active:
             for event in self.segmenter.update(now=self.clock/16000,idle=(self.clock-self.last_voice_clock)/16000,final=stop):
@@ -108,7 +159,13 @@ class QwenRecognizer:
             self.preview('')
             return
         final=stop or self.silence>=self.silence_limit or self.size>=self.hard_limit
-        due=self.size>=32000 and self.clock-self.last_infer>=self.interval_samples and self.silence<2560
+        # The first context needs enough audio for the autoregressive decoder.
+        # This gate applies only until the first decode of this utterance; it is
+        # deliberately not a perpetual refresh floor and never blocks an
+        # endpoint/stop finalization below.
+        first_gate=self.size>=self.first_audio_samples if not self.first_infer_done else True
+        due=(first_gate and self.clock-self.last_infer>=self.refresh_samples()
+            and self.silence<2560 and self.size>self.last_infer_size)
         # Flush an already-recognized tail on an ordinary poll, without a new
         # generation and without starting inference.
         trigger=self.delivery.trigger(self.pending_text())
@@ -122,14 +179,29 @@ class QwenRecognizer:
                 if stop:self.poll(stop=True)
             return
         if self.size>self.engine.max_samples:raise RuntimeError('Qwen 音频超过 NPU 窗口，未回退其他设备')
+        # Same audio cannot produce a better final result than the one already
+        # stored; never decode it again. This also covers stop while the last
+        # preview is still the newest available result.
+        same_audio=self.latest is not None and self.size==self.last_infer_size
         # Silence needs no additional decoder pass if the speech was already
         # recognized in a preview; trailing ambience is not new linguistic input.
-        reusable=final and self.latest is not None and self.last_infer>=self.last_voice_clock+2560
+        reusable=final and (same_audio or (self.latest is not None
+            and self.last_infer>=self.last_voice_clock+2560))
+        begun=0. if reusable else time.perf_counter()
         result=self.latest if reusable else self.engine.infer(self.storage[:self.size])
+        if not reusable:
+            # The wall clock wraps the whole call, including autoregressive
+            # decode. A reported inference time is a fallback only.
+            self.inference_cost=max(_measured_inference_cost(begun,result),self.inference_cost*.8)
+            self.last_infer_size=self.size
+            self.first_infer_done=True
         self.latest=result;self.latest_size=self.size;self.last_infer=self.clock
         confirmed,preview,lo,hi=self.agreement.update(result['text'],final=final,language=result.get('language','auto'))
-        if not reusable:self.emit('metrics',dict(infer_ms=result['infer_ms'],cpu_ms=result.get('cpu_ms',0),
-            audio_seconds=self.size/16000,source_language=result.get('language','auto'),**self.agc.metrics()))
+        if not reusable:self.emit('metrics',dict(
+            infer_ms=_finite_positive(result.get('infer_ms',0),_MAX_INFERENCE_COST_SECONDS*1000),
+            cpu_ms=_finite_positive(result.get('cpu_ms',0),_MAX_INFERENCE_COST_SECONDS*1000),
+            audio_seconds=self.size/16000,source_language=result.get('language','auto'),
+            refresh_interval_ms=self.refresh_samples()/16,**self.agc.metrics()))
         if confirmed or stop:
             end=max(self.base+4000,self.clock-self.silence)/16000
             duration=end-self.base/16000;length=max(1,len(result['text']))
@@ -155,13 +227,23 @@ class QwenRecognizer:
             for _ in range(64):
                 trigger=self.delivery.trigger(self.pending_text())
                 if not trigger or not self.force_pending(trigger):break
-            self.reset()
+            # Only an uninterrupted 12 s hard-window continuation keeps the
+            # measured cost. Natural idle/endpoint/stop starts a new utterance
+            # whose first decode is gated by audio context alone.
+            hard_continuation=(not stop and self.size>=self.hard_limit
+                and self.silence<self.silence_limit)
+            self.reset(keep_cost=hard_continuation)
     def preview(self,text):
         text=join_text(self.segmenter.text,text.strip())
         if text!=self.last_preview:
             self.last_preview=text;self.emit('partial',{'text':text})
-    def reset(self):
+    def reset(self,keep_cost=False):
         self.size=0;self.active=False;self.silence=0;self.speech_run=0;self.latest=None;self.latest_size=0
+        # Retained cost is only for uninterrupted hard-window continuation or
+        # until a real idle gap is observed. Natural stop/endpoint resets clear
+        # it so a genuinely new utterance starts from its requested cadence.
+        if not keep_cost:self.inference_cost=0.
+        self.first_infer_done=False;self.last_infer_size=0;self.inactive_gap=0.
         self.agreement=TextAgreement()
         self.pre.clear();self.preview('')
         self.delivery.reset();self.gate_preview=''

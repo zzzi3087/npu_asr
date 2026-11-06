@@ -122,9 +122,12 @@ with tempfile.TemporaryDirectory() as directory:
                 worker.stop_capture.set()
                 worker.capture(options)
                 params = stub.last
+                assert params['interval'] == options['interval'], (mode, params)
                 assert params['final_delivery_enabled'] is enabled, (mode, params)
                 assert params['final_delivery_wait'] == wait, (mode, params)
                 assert params['final_delivery_words'] == words, (mode, params)
+                if mode == 'utterance':
+                    assert 'confirmation_wait' not in params, params
 
             # The real core constructors accept the same kwargs unchanged.
             if original_recognizer is not skip and original_qwen is not skip:
