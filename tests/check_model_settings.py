@@ -21,7 +21,7 @@ model('parakeet');assert d.source_language.currentData()=='English' and d.source
 assert all(row(w) for w in (d.interval,d.confirmation_wait,d.feature_backend,d.feature_note))
 assert d.domain_editor.form.isRowVisible(d.domain_editor.strength) and not d.domain_editor.form.isRowVisible(d.domain_editor.background)
 model('parakeet-v3');language('Ukrainian');model('qwen3-asr-1.7b');assert d.source_language.currentData()=='auto'
-assert not any(row(w) for w in (d.interval,d.confirmation_wait,d.feature_backend,d.feature_note))
+assert row(d.interval) and not any(row(w) for w in (d.confirmation_wait,d.feature_backend,d.feature_note))
 assert d.domain_editor.form.isRowVisible(d.domain_editor.background) and not d.domain_editor.form.isRowVisible(d.domain_editor.strength)
 language('German');model('parakeet-v3');assert d.source_language.currentData()=='German';model('mega-asr');assert d.source_language.currentData()=='German'
 model('parakeet');draft=d.draft();assert draft['feature_backend']=='gpu' and draft['interval']==2. and draft['confirmation_wait']==4.
