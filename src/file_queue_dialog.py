@@ -66,7 +66,11 @@ class FileQueueDialog(QDialog):
         buttons.addStretch()
         self.open_button=QPushButton('查看字幕');self.open_button.clicked.connect(self.open_result);buttons.addWidget(self.open_button)
         edits=QHBoxLayout();layout.addLayout(edits)
-        self.retry_button=QPushButton('重试');self.retry_button.clicked.connect(lambda:self.queue.retry(self.selected()));edits.addWidget(self.retry_button)
+        self.retry_button=QPushButton('重试转录');self.retry_button.clicked.connect(lambda:self.queue.retry(self.selected()));edits.addWidget(self.retry_button)
+        self.translate_cancel_button=QPushButton('取消翻译')
+        self.translate_cancel_button.clicked.connect(self.cancel_translation);edits.addWidget(self.translate_cancel_button)
+        self.translate_retry_button=QPushButton('重试翻译')
+        self.translate_retry_button.clicked.connect(self.retry_translation);edits.addWidget(self.translate_retry_button)
         self.remove_button=QPushButton('移除');self.remove_button.clicked.connect(lambda:self.queue.remove(self.selected()));edits.addWidget(self.remove_button)
         self.up_button=QPushButton('↑');self.up_button.setToolTip('提前处理选中的等待任务');self.up_button.clicked.connect(lambda:self.queue.move(self.selected(),-1));edits.addWidget(self.up_button)
         self.down_button=QPushButton('↓');self.down_button.setToolTip('延后处理选中的等待任务');self.down_button.clicked.connect(lambda:self.queue.move(self.selected(),1));edits.addWidget(self.down_button)
@@ -124,13 +128,25 @@ class FileQueueDialog(QDialog):
                 if job['id']==selected:self.tree.setCurrentItem(item)
             self.tree.blockSignals(False)
         for job in self.queue.jobs:
-            item,progress=self.items[job['id']];item.setText(1,LABELS.get(job['status'],job['status']));item.setToolTip(1,job.get('error',''))
+            item,progress=self.items[job['id']]
+            status=LABELS.get(job['status'],job['status'])
+            translation=job.get('translation_status','')
+            extra={'translating':'翻译 %d/%d 批'%(job.get('translation_done',0),job.get('translation_total',0)),
+                'completed':'翻译完成','failed':'翻译失败','cancelled':'翻译已取消','disabled':'翻译关闭'}.get(translation,'')
+            if extra:status+=' · '+extra
+            item.setText(1,status)
+            item.setToolTip(1,'\n'.join(value for value in (job.get('error',''),job.get('translation_error','')) if value))
             item.setText(3,job['options'].get('asr_model','parakeet'))
-            progress.setValue(round(job.get('percent',0)));stage=job.get('stage_percent')
-            progress.setFormat('%p% · '+(f'阶段 {stage:.0f}%' if stage is not None else '时长未知'))
+            if job['status']=='completed' and translation:
+                percent=round(job.get('translation_percent',0))
+                progress.setValue(percent);progress.setFormat(f'翻译 {percent}%')
+            else:
+                progress.setValue(round(job.get('percent',0)));stage=job.get('stage_percent')
+                progress.setFormat('%p% · '+(f'阶段 {stage:.0f}%' if stage is not None else '时长未知'))
         pending=sum(job['status']=='queued' for job in self.queue.jobs);done=sum(job['status']=='completed' for job in self.queue.jobs)
+        translating=sum(job.get('translation_status')=='translating' for job in self.queue.jobs)
         suffix='已暂停，将在当前任务结束后等待' if self.queue.paused else ('等待停止收音或 NPU 就绪' if pending and not self.queue.available else '按顺序处理')
-        self.summary.setText(f'共 {len(self.queue.jobs)} 项 · 完成 {done} · 等待 {pending} · {suffix}')
+        self.summary.setText(f'共 {len(self.queue.jobs)} 项 · 完成 {done} · 等待 {pending} · 翻译中 {translating} · {suffix}')
         settings=self.window.settings
         self.options_label.setText(f'文件模型和语言独立保存，只影响新添加的文件；队列中的模型、语言和词表保持不变。译文目标：{settings["target_language"]}，翻译与增益使用设置中的选项。')
         self.pause_button.setText('继续队列' if self.queue.paused else '暂停队列')
@@ -141,11 +157,22 @@ class FileQueueDialog(QDialog):
         job=self.queue.find(self.selected())
         self.retry_button.setEnabled(bool(job and job['id']!=self.queue.active and job['status'] in FINISHED))
         self.remove_button.setEnabled(bool(job and job['id']!=self.queue.active))
+        translation=job.get('translation_status','') if job else ''
+        self.translate_cancel_button.setEnabled(bool(job and translation=='translating' and job.get('session')))
+        self.translate_retry_button.setEnabled(bool(job and job.get('session') and translation in ('failed','cancelled')
+            and self.window.settings.get('translate')))
         for button in (self.up_button,self.down_button):button.setEnabled(bool(job and job['status']=='queued'))
         self.open_button.setEnabled(bool(job and job.get('session') and self.window.history.session(job['session'])))
         if not job:
             self.details.setText('选择任务可查看响度、峰值、采样率和预处理结果。');return
         lines=[job['name']+' · '+LABELS.get(job['status'],'')]
+        if job.get('translation_status'):
+            translation_label={'translating':'进行中','completed':'完成','failed':'失败',
+                'cancelled':'已取消','disabled':'已关闭'}.get(job.get('translation_status'),str(job.get('translation_status')))
+            lines.append('批量翻译：'+translation_label+
+                (f' · {job.get("translation_done",0)}/{job.get("translation_total",0)} 批' if job.get('translation_total') else ''))
+        if job.get('translation_flags'):lines.append(f'数量/单位/否定待核标记：{job["translation_flags"]} 处')
+        if job.get('translation_error'):lines.append(job['translation_error'])
         stats=job.get('analysis')
         if stats:
             def db(value,suffix):return '无法测量' if value is None else f'{value:.1f} {suffix}'
@@ -154,6 +181,15 @@ class FileQueueDialog(QDialog):
             lines+=stats.get('warnings',[])
         if job.get('error'):lines.append(job['error'])
         self.details.setText('\n'.join(lines))
+
+    def cancel_translation(self):
+        job=self.queue.find(self.selected())
+        if job and job.get('session'):self.window.cancel_file_translation(job['session']);self.refresh()
+
+    def retry_translation(self):
+        job=self.queue.find(self.selected())
+        if job and job.get('session'):
+            self.window.start_file_translation(job['session'],retry_failed=True);self.refresh()
 
     def open_result(self):
         job=self.queue.find(self.selected())

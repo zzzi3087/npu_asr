@@ -89,6 +89,16 @@ class FileQueue(QObject):
 
     def find(self,ident):return next((job for job in self.jobs if job['id']==ident),None)
 
+    def job_for_session(self,session_id):
+        return next((job for job in self.jobs if job.get('session')==session_id),None)
+
+    def translation_update(self,session_id,value):
+        """Persist batch-translation state even after ASR has finished."""
+        job=self.job_for_session(session_id)
+        if not job:return None
+        job.update(value);self.save();self.changed.emit()
+        return job
+
     def schedule(self):QTimer.singleShot(0,self.start_next)
 
     def set_available(self,available):
@@ -124,7 +134,9 @@ class FileQueue(QObject):
     def retry(self,ident):
         job=self.find(ident)
         if job and ident!=self.active and job['status'] in FINISHED:
-            job.update(status='queued',percent=0,stage_percent=0,error='',session=None,analysis=None)
+            job.update(status='queued',percent=0,stage_percent=0,error='',session=None,analysis=None,
+                translation_status='',translation_percent=0,translation_done=0,translation_total=0,
+                translation_error='',translation_flags=0)
             self.save();self.changed.emit();self.schedule()
 
     def remove(self,ident):

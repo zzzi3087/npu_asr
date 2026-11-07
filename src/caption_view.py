@@ -51,6 +51,9 @@ class CaptionView(QTextBrowser):
         self._incremental_updates=0
         self._row_replacements=0
         self._pins=0
+        self._reveal_key=None
+        self._last_reveal_key=None
+        self._reveal_retry=False
         bar=self.verticalScrollBar()
         bar.rangeChanged.connect(self._on_range_changed)
         bar.sliderPressed.connect(self._on_slider_pressed)
@@ -68,6 +71,8 @@ class CaptionView(QTextBrowser):
     def row_replacement_count(self):return self._row_replacements
     @property
     def pin_count(self):return self._pins
+    @property
+    def last_revealed_key(self):return self._last_reveal_key
 
     def visible_rows(self):return list(self._rows)
     def visible_row_ids(self):return [row_identity(row) for row in self._rows]
@@ -90,9 +95,53 @@ class CaptionView(QTextBrowser):
         self._rebase=False
         self._dragging=False
         self._follow=True
+        self._reveal_key=None
+        self._last_reveal_key=None
+        self._reveal_retry=False
 
     def reading_anchor(self):
         return dict(self._anchor) if self._anchor else self._capture_anchor()
+
+    def reveal_row(self,key):
+        """Pause follow-latest and center a logical row, e.g. a search hit."""
+        key=str(key)
+        if not any(row_identity(row)==key or str(row.get('id'))==key for row in self._rows):
+            return False
+        self._follow=False
+        self._anchor=None
+        self._anchor_pending=False
+        self._reveal_key=key
+        self._last_reveal_key=key
+        self._reveal_retry=True
+        self._generation+=1
+        self.followChanged.emit(False)
+        QTimer.singleShot(0,self._apply_reveal)
+        return True
+
+    def _apply_reveal(self):
+        key=self._reveal_key
+        if not key or self._follow:return
+        index=next((position for position,row in enumerate(self._rows)
+            if row_identity(row)==key or str(row.get('id'))==key),None)
+        if index is None:return
+        first,count=self._blocks[index]
+        if count==0:
+            for distance in range(1,len(self._rows)+1):
+                found=False
+                for candidate in (index-distance,index+distance):
+                    if 0<=candidate<len(self._rows) and self._blocks[candidate][1]:
+                        first,count=self._blocks[candidate];found=True;break
+                if found:break
+        if count==0:return
+        block=self.document().findBlockByNumber(first)
+        if not block.isValid():return
+        rect=self.document().documentLayout().blockBoundingRect(block)
+        if rect.height()<=0 and self._reveal_retry:
+            self._reveal_retry=False;QTimer.singleShot(25,self._apply_reveal);return
+        bar=self.verticalScrollBar()
+        centered=rect.top()-(self.viewport().height()-rect.height())/2
+        bar.setValue(max(0,min(int(round(centered)),bar.maximum())))
+        self._reveal_key=None
 
     def set_captions(self,rows,colors,settings,reset=False,rebase=False):
         rows=[dict(row) for row in rows]

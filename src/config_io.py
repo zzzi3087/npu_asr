@@ -95,14 +95,16 @@ def validate_configuration(value):
     for profile in profiles:
         if not isinstance(profile,dict):raise ValueError('翻译服务配置无效')
         p=without_secrets({key:copy.deepcopy(val) for key,val in profile.items()
-            if key in {'id','name','protocol','base_url','model','auth','api_version','workspace','extra'}})
+            if key in {'id','name','protocol','base_url','model','auth','api_version','workspace','reasoning','extra'}})
         for key,default in [('id',uuid.uuid4().hex),('name','自定义服务'),('protocol','openai'),('base_url',''),
-            ('model',''),('auth','auto'),('api_version','2023-06-01'),('workspace','')]:
+            ('model',''),('auth','auto'),('api_version','2023-06-01'),('workspace',''),('reasoning','auto')]:
             p.setdefault(key,default)
             if not isinstance(p[key],str) or len(p[key])>2048:raise ValueError('翻译服务字段无效：'+key)
         if not p['id'] or p['id'] in ids:raise ValueError('翻译服务 ID 重复或为空')
         if p['protocol'] not in ('openai','anthropic') or p['auth'] not in ('auto','bearer','x-api-key','api-key','none'):
             raise ValueError('不支持的接口或认证格式')
+        if p['reasoning'] not in ('auto','off','low','medium','high','max'):
+            raise ValueError('不支持的思考模式')
         p['base_url']=clean_url(p['base_url'])
         p.setdefault('extra',{})
         if not isinstance(p['extra'],dict):raise ValueError('服务额外参数必须是对象')

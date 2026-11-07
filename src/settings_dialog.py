@@ -6,7 +6,7 @@ from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (QDialog,QVBoxLayout,QHBoxLayout,QFormLayout,QWidget,
     QComboBox,QLineEdit,QPlainTextEdit,QLabel,QPushButton,QCheckBox,QSpinBox,QDoubleSpinBox,QDialogButtonBox,QMessageBox,QFileDialog,QScrollArea,QSizePolicy,QAbstractSpinBox)
 from storage import DATA, save_settings, final_delivery_enabled, final_delivery_wait, final_delivery_words
-from translation import get_key,save_key,validate_profile,endpoint
+from translation import get_key,save_key,validate_profile,endpoint,capability_status
 from theme_editor import ThemeEditor
 from typography_editor import TypographyEditor
 from config_io import export_configuration,import_configuration
@@ -100,6 +100,16 @@ class SettingsDialog(QDialog):
         self.model = QLineEdit()
         self.model.setPlaceholderText('填写该服务提供的模型 ID')
         form.addRow('模型 ID',self.model)
+        self.reasoning = QComboBox()
+        for text,value in [('自动 · 按服务与模型启用','auto'),('关闭思考','off'),
+                ('低推理强度','low'),('中推理强度','medium'),('高推理强度','high'),
+                ('最高强度 max / 最大预算','max')]:
+            self.reasoning.addItem(text,value)
+        self.reasoning.setToolTip('仅用于本地音频文件的批量翻译；实时字幕保持现有行为。无法确认能力的第三方服务在自动或强度模式下会明确报错，不会静默降级为非思考。')
+        form.addRow('思考模式 · 文件批量翻译',self.reasoning)
+        self.reasoning_status=QLabel('填写 API 地址和模型 ID 后显示实际发送的思考参数。')
+        self.reasoning_status.setWordWrap(True);self.reasoning_status.setObjectName('muted')
+        form.addRow(self.reasoning_status)
         self.key = QLineEdit()
         self.key.setEchoMode(QLineEdit.EchoMode.Password)
         form.addRow('API 密钥',self.key)
@@ -340,6 +350,11 @@ class SettingsDialog(QDialog):
             form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         self.asr_model.currentIndexChanged.connect(self.update_model_dependencies)
         self.protocol.currentIndexChanged.connect(self.update_dependencies)
+        self.protocol.currentIndexChanged.connect(self.update_reasoning_status)
+        self.url.textChanged.connect(self.update_reasoning_status)
+        self.model.textChanged.connect(self.update_reasoning_status)
+        self.reasoning.currentIndexChanged.connect(self.update_reasoning_status)
+        self.extra.textChanged.connect(self.update_reasoning_status)
         self.agc_enabled.toggled.connect(self.update_dependencies)
         self.update_model_dependencies()
         self.update_dependencies()
@@ -372,6 +387,20 @@ class SettingsDialog(QDialog):
         self.version.setEnabled(anthropic);self.workspace.setEnabled(anthropic)
         for key,field in self.agc_fields.items():field.setEnabled(key=='manual_db' or self.agc_enabled.isChecked())
 
+    def update_reasoning_status(self,*_):
+        if self.loading or not hasattr(self,'reasoning_status'):return
+        if not self.url.text().strip() or not self.model.text().strip():
+            self.reasoning_status.setText('填写 API 地址和模型 ID 后显示实际发送的思考参数。');return
+        candidate=dict(self.current or {},protocol=self.protocol.currentData(),
+            base_url=self.url.text().strip(),model=self.model.text().strip(),
+            reasoning=self.reasoning.currentData())
+        try:
+            extra=json.loads(self.extra.toPlainText() or '{}')
+            if isinstance(extra,dict):candidate['extra']=extra
+        except ValueError:pass
+        try:self.reasoning_status.setText(capability_status(candidate))
+        except Exception:self.reasoning_status.setText('⚠ 无法读取思考能力；自动模式不会静默降级。')
+
     def eventFilter(self,field,event):
         if event.type()==QEvent.Type.Wheel and not field.hasFocus():
             parent=field.parentWidget()
@@ -386,7 +415,8 @@ class SettingsDialog(QDialog):
             return
         p = self.current
         p.update(name=self.name.text().strip(),protocol=self.protocol.currentData(),base_url=self.url.text().strip(),
-            model=self.model.text().strip(),auth=self.auth.currentData(),api_version=self.version.text().strip(),workspace=self.workspace.text().strip())
+            model=self.model.text().strip(),auth=self.auth.currentData(),api_version=self.version.text().strip(),
+            workspace=self.workspace.text().strip(),reasoning=self.reasoning.currentData())
         self.secrets[p['id']] = self.key.text().strip()
         self.extra_text[p['id']] = self.extra.toPlainText().strip() or '{}'
         try:p['extra'] = json.loads(self.extra_text[p['id']])
@@ -408,13 +438,15 @@ class SettingsDialog(QDialog):
         self.auth.setCurrentIndex(max(0,self.auth.findData(p.get('auth','auto'))))
         self.version.setText(p.get('api_version','2023-06-01'))
         self.workspace.setText(p.get('workspace',''))
+        self.reasoning.setCurrentIndex(max(0,self.reasoning.findData(p.get('reasoning','auto'))))
         self.extra.setPlainText(self.extra_text.get(p['id'],json.dumps(p.get('extra',{}),ensure_ascii=False,indent=2)))
         self.loading = False
+        self.update_reasoning_status()
 
     def new_profile(self):
         self.stash()
         p = {'id':uuid.uuid4().hex,'name':'自定义服务','protocol':'openai','base_url':'','model':'',
-             'auth':'auto','api_version':'2023-06-01','workspace':'','extra':{}}
+             'auth':'auto','api_version':'2023-06-01','workspace':'','reasoning':'auto','extra':{}}
         self.settings['profiles'].append(p)
         self.profile.addItem(p['name'],p['id'])
         self.profile.setCurrentIndex(self.profile.count()-1)

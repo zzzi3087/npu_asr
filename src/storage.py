@@ -1,5 +1,6 @@
 """Local settings and durable, ordered subtitle sessions. No secrets in SQLite."""
 import csv
+import hashlib
 import io
 import json
 import math
@@ -26,6 +27,19 @@ def utc_now():
     return datetime.now(timezone.utc).isoformat(timespec='milliseconds')
 
 
+def text_fingerprint(text):
+    return hashlib.sha256(str(text or '').encode('utf-8')).hexdigest()
+
+
+def batch_fingerprint(texts):
+    """Stable hash over one batch's ordered source cues (never over translations)."""
+    digest = hashlib.sha256()
+    for text in texts:
+        digest.update(text_fingerprint(text).encode('ascii'))
+        digest.update(b'\0')
+    return digest.hexdigest()
+
+
 def final_delivery_enabled(value=True):
     return value if type(value) is bool else True
 
@@ -49,14 +63,14 @@ def default_settings():
         'theme':normalize_theme(), 'saved_themes':[], 'typography':default_typography(), 'microphone_name': '', 'audio_source':normalize_audio_source(), 'profiles': [
             {'id': 'deepseek', 'name': 'DeepSeek', 'protocol': 'openai',
              'base_url': 'https://api.deepseek.com', 'model': 'deepseek-flash',
-             'auth': 'auto', 'api_version': '2023-06-01', 'workspace': '',
+             'auth': 'auto', 'api_version': '2023-06-01', 'workspace': '', 'reasoning': 'auto',
              'extra': {'thinking': {'type': 'disabled'}, 'max_tokens': 1200}},
             {'id': 'openai', 'name': 'OpenAI', 'protocol': 'openai',
              'base_url': 'https://api.openai.com/v1', 'model': '', 'auth': 'auto',
-             'api_version': '2023-06-01', 'workspace': '', 'extra': {}},
+             'api_version': '2023-06-01', 'workspace': '', 'reasoning': 'auto', 'extra': {}},
             {'id': 'anthropic', 'name': 'Anthropic', 'protocol': 'anthropic',
              'base_url': 'https://api.anthropic.com', 'model': '', 'auth': 'auto',
-             'api_version': '2023-06-01', 'workspace': '', 'extra': {}},
+             'api_version': '2023-06-01', 'workspace': '', 'reasoning': 'auto', 'extra': {}},
         ]}
 
 
@@ -86,6 +100,10 @@ def load_settings(directory=DATA):
     defaults['final_delivery_enabled']=final_delivery_enabled(defaults.get('final_delivery_enabled'))
     defaults['final_delivery_wait']=final_delivery_wait(defaults.get('final_delivery_wait'))
     defaults['final_delivery_words']=final_delivery_words(defaults.get('final_delivery_words'))
+    reasoning_modes=('auto','off','low','medium','high','max')
+    for profile in defaults.get('profiles',[]):
+        if not isinstance(profile,dict):continue
+        if profile.get('reasoning') not in reasoning_modes:profile['reasoning']='auto'
     return defaults
 
 
@@ -107,8 +125,11 @@ def save_settings(settings, directory=DATA):
     clean['domain_bias']=normalize_domain_bias(settings.get('domain_bias'))
     clean['desktop_captions']=normalize_desktop_captions(settings.get('desktop_captions'))
     clean['audio_source']=normalize_audio_source(settings.get('audio_source'),legacy=settings.get('microphone_name',''))
-    allowed = {'id','name','protocol','base_url','model','auth','api_version','workspace','extra'}
+    allowed = {'id','name','protocol','base_url','model','auth','api_version','workspace','reasoning','extra'}
     clean['profiles'] = [{k:v for k,v in p.items() if k in allowed} for p in clean['profiles']]
+    for profile in clean['profiles']:
+        if profile.get('reasoning') not in ('auto','off','low','medium','high','max'):
+            profile['reasoning']='auto'
     temp = directory / 'settings.json.tmp'
     temp.write_text(json.dumps(clean, ensure_ascii=False, indent=2), 'utf-8')
     temp.replace(directory / 'settings.json')
@@ -118,6 +139,7 @@ class History:
     def __init__(self, path=None, recover=False):
         path = Path(path) if path else DATA / 'history.sqlite3'
         path.parent.mkdir(parents=True, exist_ok=True)
+        self.path = str(path)
         self.db = sqlite3.connect(path, timeout=5)
         self.db.row_factory = sqlite3.Row
         self.db.execute('PRAGMA journal_mode=WAL')
@@ -137,7 +159,30 @@ class History:
             CREATE INDEX IF NOT EXISTS segment_session ON segments(session_id, seq);
             CREATE INDEX IF NOT EXISTS segment_pending ON segments(session_id,status,seq);
             CREATE INDEX IF NOT EXISTS session_date ON sessions(created_at DESC);
+            CREATE TABLE IF NOT EXISTS file_sessions (
+                session_id TEXT PRIMARY KEY REFERENCES sessions(id), created_at TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS batch_runs (
+                session_id TEXT PRIMARY KEY REFERENCES sessions(id),
+                run_id TEXT NOT NULL, source_revision TEXT NOT NULL,
+                status TEXT NOT NULL, target_language TEXT NOT NULL,
+                provider TEXT NOT NULL, model TEXT NOT NULL,
+                reasoning TEXT NOT NULL DEFAULT 'auto', batch_count INTEGER NOT NULL DEFAULT 0,
+                error TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS translation_batches (
+                session_id TEXT NOT NULL REFERENCES sessions(id), batch_id TEXT NOT NULL,
+                run_id TEXT NOT NULL, ordinal INTEGER NOT NULL, items TEXT NOT NULL,
+                source_hash TEXT NOT NULL, status TEXT NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0, claim TEXT NOT NULL DEFAULT '',
+                error TEXT NOT NULL DEFAULT '', flags TEXT NOT NULL DEFAULT '[]',
+                created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                PRIMARY KEY(session_id, batch_id));
+            CREATE INDEX IF NOT EXISTS batch_session ON translation_batches(session_id,run_id,ordinal);
         ''')
+        # Older builds saved file sessions without a marker; route their explicit
+        # retries through the batch path too.
+        with self.db:
+            self.db.execute("INSERT OR IGNORE INTO file_sessions (session_id,created_at) "
+                "SELECT id,created_at FROM sessions WHERE title LIKE '文件 · %'")
         columns={r[1] for r in self.db.execute('PRAGMA table_info(segments)')}
         for name in ('provider','model'):
             if name not in columns:self.db.execute(f"ALTER TABLE segments ADD COLUMN {name} TEXT NOT NULL DEFAULT ''")
@@ -149,11 +194,14 @@ class History:
                 self.db.execute("UPDATE segments SET status='interrupted', error='上次退出时翻译未完成，可重试' WHERE status IN ('queued','pending')")
                 self.db.execute('UPDATE sessions SET ended_at=? WHERE ended_at IS NULL', (utc_now(),))
 
-    def create_session(self, title, profile, session_id=None):
+    def create_session(self, title, profile, session_id=None, kind='realtime'):
         sid = session_id or uuid.uuid4().hex
         with self.db:
-            self.db.execute('INSERT INTO sessions VALUES (?,?,?,?,?,?)',
+            self.db.execute('INSERT INTO sessions (id,title,created_at,ended_at,provider,model) VALUES (?,?,?,?,?,?)',
                 (sid, title, utc_now(), None, profile.get('name',''), profile.get('model','')))
+            if kind == 'file':
+                self.db.execute('INSERT INTO file_sessions (session_id,created_at) VALUES (?,?)',
+                    (sid, utc_now()))
         return sid
 
     def finish(self, sid):
@@ -167,6 +215,9 @@ class History:
 
     def delete_session(self,sid):
         with self.db:
+            self.db.execute('DELETE FROM translation_batches WHERE session_id=?',(sid,))
+            self.db.execute('DELETE FROM batch_runs WHERE session_id=?',(sid,))
+            self.db.execute('DELETE FROM file_sessions WHERE session_id=?',(sid,))
             self.db.execute('DELETE FROM segments WHERE session_id=?',(sid,))
             self.db.execute('DELETE FROM sessions WHERE id=?',(sid,))
 
@@ -203,6 +254,23 @@ class History:
             args.append(limit)
         return [dict(row) for row in self.db.execute(sql,args)]
 
+    def rows_around(self, sid, seq, before=60, after=60):
+        """A bounded cue window for opening an old search result."""
+        seq = int(seq)
+        earlier = [dict(row) for row in self.db.execute(
+            'SELECT * FROM segments WHERE session_id=? AND seq<=? ORDER BY seq DESC LIMIT ?',
+            (sid, seq, max(0, int(before)) + 1))]
+        later = [dict(row) for row in self.db.execute(
+            'SELECT * FROM segments WHERE session_id=? AND seq>? ORDER BY seq LIMIT ?',
+            (sid, seq, max(0, int(after))))]
+        return list(reversed(earlier)) + later
+
+    def rows_before(self, sid, seq, limit=100):
+        """Older cues for the paused-view “show earlier” action."""
+        return [dict(row) for row in self.db.execute(
+            'SELECT * FROM segments WHERE session_id=? AND seq<? ORDER BY seq DESC LIMIT ?',
+            (sid, int(seq), max(1, int(limit))))][::-1]
+
     def rows_by_ids(self, sid, idents):
         """Refresh only rows currently visible in a paused reading snapshot."""
         idents=[ident for ident in dict.fromkeys(idents) if ident]
@@ -229,7 +297,17 @@ class History:
 
     def session(self, sid):
         row = self.db.execute('SELECT * FROM sessions WHERE id=?',(sid,)).fetchone()
-        return dict(row) if row else None
+        if not row:return None
+        result = dict(row)
+        result['kind'] = 'file' if self.db.execute(
+            'SELECT 1 FROM file_sessions WHERE session_id=?',(sid,)).fetchone() else 'realtime'
+        return result
+
+    def all_sessions(self):
+        """Every saved session with its cue count, newest first."""
+        return [dict(r) for r in self.db.execute('''
+            SELECT s.*, (SELECT COUNT(*) FROM segments WHERE session_id=s.id) AS count
+            FROM sessions s ORDER BY s.created_at DESC''')]
 
     def sessions(self, query='', limit=100):
         pattern = '%'+query.replace('\\','\\\\').replace('%','\\%').replace('_','\\_')+'%'
@@ -251,6 +329,247 @@ class History:
     def fail_queued(self,sid,error):
         with self.db:self.db.execute("UPDATE segments SET status='failed',error=? WHERE session_id=? AND status='queued'",(error,sid))
 
+    def translation_revision(self, sid):
+        """Hash of the raw transcript identity/text; timestamps remain local and unchanged."""
+        digest = hashlib.sha256()
+        for row in self.db.execute(
+                'SELECT id,seq,start_ms,end_ms,en FROM segments WHERE session_id=? ORDER BY seq', (sid,)):
+            for value in (row['id'], row['seq'], row['start_ms'], row['end_ms'], row['en']):
+                digest.update(str(value).encode('utf-8')); digest.update(b'\0')
+        return digest.hexdigest()
+
+    def batch_run(self, sid):
+        row = self.db.execute('SELECT * FROM batch_runs WHERE session_id=?', (sid,)).fetchone()
+        if not row:return None
+        result = dict(row)
+        result['counts'] = self.batch_progress(sid, result['run_id'])
+        return result
+
+    def create_batch_run(self, sid, revision, profile, target_language, reasoning, batches):
+        """Atomically replace the durable plan for one file session."""
+        run_id = uuid.uuid4().hex; now = utc_now()
+        with self.db:
+            self.db.execute('DELETE FROM translation_batches WHERE session_id=?', (sid,))
+            self.db.execute('''INSERT INTO batch_runs
+                (session_id,run_id,source_revision,status,target_language,provider,model,reasoning,batch_count,error,created_at,updated_at)
+                VALUES (?,?,?,'translating',?,?,?,?,?,'',?,?)
+                ON CONFLICT(session_id) DO UPDATE SET run_id=excluded.run_id,source_revision=excluded.source_revision,
+                status='translating',target_language=excluded.target_language,provider=excluded.provider,model=excluded.model,
+                reasoning=excluded.reasoning,batch_count=excluded.batch_count,error='',created_at=excluded.created_at,updated_at=excluded.updated_at''',
+                (sid, run_id, revision, target_language, profile.get('name',''), profile.get('model',''),
+                 str(reasoning or 'auto'), len(batches), now, now))
+            for ordinal, batch in enumerate(batches):
+                self.db.execute('''INSERT INTO translation_batches
+                    (session_id,batch_id,run_id,ordinal,items,source_hash,status,attempts,claim,error,flags,created_at,updated_at)
+                    VALUES (?,?,?,?,?,?,'pending',0,'','','[]',?,?)''',
+                    (sid, batch['batch_id'], run_id, ordinal,
+                     json.dumps(batch['items'], ensure_ascii=False, separators=(',', ':')),
+                     batch['source_hash'], now, now))
+        return run_id
+
+    def set_batch_run_provider(self, sid, run_id, profile, reasoning):
+        with self.db:
+            self.db.execute('UPDATE batch_runs SET provider=?,model=?,reasoning=?,updated_at=? WHERE session_id=? AND run_id=?',
+                (profile.get('name',''), profile.get('model',''), str(reasoning or 'auto'), utc_now(), sid, run_id))
+
+    def batches_for_run(self, sid, run_id):
+        return [dict(row) for row in self.db.execute(
+            'SELECT * FROM translation_batches WHERE session_id=? AND run_id=? ORDER BY ordinal', (sid, run_id))]
+
+    def batch_progress(self, sid, run_id=None):
+        sql = '''SELECT COUNT(*) AS total,
+            SUM(CASE WHEN status='done' THEN 1 ELSE 0 END) AS done,
+            SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) AS failed,
+            SUM(CASE WHEN status='cancelled' THEN 1 ELSE 0 END) AS cancelled,
+            SUM(CASE WHEN status IN ('pending','translating') THEN 1 ELSE 0 END) AS pending
+            FROM translation_batches WHERE session_id=?'''
+        args = [sid]
+        if run_id is not None:
+            sql += ' AND run_id=?'; args.append(run_id)
+        row = self.db.execute(sql, args).fetchone()
+        return {key:int(row[key] or 0) for key in ('total','done','failed','cancelled','pending')}
+
+    def pending_batches(self, sid, run_id):
+        return [dict(row) for row in self.db.execute(
+            "SELECT * FROM translation_batches WHERE session_id=? AND run_id=? AND status='pending' ORDER BY ordinal",
+            (sid, run_id))]
+
+    def release_batch_claim(self, sid, run_id, batch_id, claim):
+        with self.db:
+            self.db.execute("UPDATE translation_batches SET status='pending',claim='',updated_at=? "
+                "WHERE session_id=? AND batch_id=? AND run_id=? AND claim=? AND status='translating'",
+                (utc_now(), sid, batch_id, run_id, claim))
+
+    def claim_batch(self, sid, run_id, batch_id):
+        """Return a claim token only for the current run and an unclaimed batch."""
+        with self.db:
+            run = self.db.execute('SELECT * FROM batch_runs WHERE session_id=?', (sid,)).fetchone()
+            if not run or run['run_id'] != run_id or run['status'] not in ('translating','interrupted','preparing'):
+                return None
+            batch = self.db.execute(
+                'SELECT * FROM translation_batches WHERE session_id=? AND batch_id=? AND run_id=?',
+                (sid, batch_id, run_id)).fetchone()
+            if not batch or batch['status'] not in ('pending','interrupted'):
+                return None
+            claim = uuid.uuid4().hex; now = utc_now()
+            self.db.execute("UPDATE translation_batches SET status='translating',claim=?,attempts=attempts+1,error='',updated_at=? WHERE session_id=? AND batch_id=?",
+                (claim, now, sid, batch_id))
+            result = dict(batch); result.update(status='translating', claim=claim, run=dict(run))
+            return result
+
+    def _finish_run_if_terminal(self, sid, run_id):
+        row = self.db.execute('''SELECT SUM(CASE WHEN status NOT IN ('done','failed','cancelled') THEN 1 ELSE 0 END) AS open,
+            SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) AS failed,
+            SUM(CASE WHEN status='done' THEN 1 ELSE 0 END) AS done
+            FROM translation_batches WHERE session_id=? AND run_id=?''', (sid, run_id)).fetchone()
+        if not row or int(row['open'] or 0):return False
+        status = 'completed' if int(row['done'] or 0) and not int(row['failed'] or 0) else ('failed' if int(row['failed'] or 0) else 'cancelled')
+        error = '' if status == 'completed' else ('部分批次翻译失败，可在历史记录中重试' if status == 'failed' else '批量翻译已取消')
+        with self.db:
+            self.db.execute('UPDATE batch_runs SET status=?,error=?,updated_at=? WHERE session_id=? AND run_id=?',
+                (status, error, utc_now(), sid, run_id))
+        return True
+
+    def apply_batch_translations(self, sid, run_id, batch_id, claim, revision, translations, flags=None):
+        """Atomic guarded write. Stale claims, revisions or source text never overwrite rows."""
+        items = None
+        with self.db:
+            run = self.db.execute('SELECT * FROM batch_runs WHERE session_id=?', (sid,)).fetchone()
+            batch = self.db.execute(
+                'SELECT * FROM translation_batches WHERE session_id=? AND batch_id=? AND run_id=?',
+                (sid, batch_id, run_id)).fetchone()
+            if not run or run['run_id'] != run_id or run['status'] != 'translating':
+                return {'ok':False,'reason':'stale-run'}
+            if not batch or batch['status'] != 'translating' or batch['claim'] != claim:
+                return {'ok':False,'reason':'stale-claim'}
+            if run['source_revision'] != revision:
+                return {'ok':False,'reason':'revision-changed'}
+            payload = json.loads(batch['items'])
+            items = payload.get('target',[]) if isinstance(payload,dict) else payload
+            sources = []
+            for item in items:
+                row = self.db.execute('SELECT en,session_id FROM segments WHERE id=?', (item['id'],)).fetchone()
+                if not row or row['session_id'] != sid or text_fingerprint(row['en']) != item.get('hash'):
+                    return {'ok':False,'reason':'source-changed'}
+                sources.append(row['en'])
+            if batch['source_hash'] != batch_fingerprint(sources):
+                return {'ok':False,'reason':'source-changed'}
+            if set(translations) != {item['id'] for item in items}:
+                return {'ok':False,'reason':'coverage'}
+            now = utc_now()
+            for item in items:
+                text = str(translations[item['id']]).strip()
+                if not text:return {'ok':False,'reason':'empty'}
+                self.db.execute('''UPDATE segments SET zh=?,status='done',error='',provider=?,model=?,target_language=?
+                    WHERE id=? AND session_id=?''',
+                    (text, run['provider'], run['model'], run['target_language'], item['id'], sid))
+            self.db.execute("UPDATE translation_batches SET status='done',claim='',error='',flags=?,updated_at=? WHERE session_id=? AND batch_id=?",
+                (json.dumps(flags or [], ensure_ascii=False), now, sid, batch_id))
+        finished = self._finish_run_if_terminal(sid, run_id)
+        return {'ok':True,'run_finished':finished,'counts':self.batch_progress(sid, run_id)}
+
+    def fail_batch(self, sid, run_id, batch_id, claim, error):
+        with self.db:
+            run = self.db.execute('SELECT * FROM batch_runs WHERE session_id=?', (sid,)).fetchone()
+            batch = self.db.execute(
+                'SELECT * FROM translation_batches WHERE session_id=? AND batch_id=? AND run_id=?',
+                (sid, batch_id, run_id)).fetchone()
+            if not run or run['run_id'] != run_id or run['status'] != 'translating' or not batch:
+                return {'ok':False,'reason':'stale'}
+            if batch['status'] == 'done' or batch['claim'] != claim:
+                return {'ok':False,'reason':'stale-claim'}
+            if run['status'] == 'cancelled':
+                return {'ok':False,'reason':'cancelled'}
+            now = utc_now()
+            payload = json.loads(batch['items'])
+            items = payload.get('target',[]) if isinstance(payload,dict) else payload
+            self.db.execute("UPDATE translation_batches SET status='failed',error=?,updated_at=? WHERE session_id=? AND batch_id=?",
+                (str(error)[:800], now, sid, batch_id))
+            for item in items:
+                self.db.execute("UPDATE segments SET status='failed',error=? WHERE id=? AND session_id=? AND (zh='' OR status!='done')",
+                    (str(error)[:800], item['id'], sid))
+        finished = self._finish_run_if_terminal(sid, run_id)
+        return {'ok':True,'run_finished':finished,'counts':self.batch_progress(sid, run_id)}
+
+    def interrupt_batch_run(self, sid, run_id=None):
+        with self.db:
+            run = self.db.execute('SELECT * FROM batch_runs WHERE session_id=?', (sid,)).fetchone()
+            if not run or (run_id and run['run_id'] != run_id) or run['status'] in ('completed','cancelled'):return None
+            self.db.execute("UPDATE batch_runs SET status='interrupted',updated_at=? WHERE session_id=?", (utc_now(), sid))
+            self.db.execute("UPDATE translation_batches SET status='pending',claim='',updated_at=? WHERE session_id=? AND run_id=? AND status='translating'",
+                (utc_now(), sid, run['run_id']))
+            return run['run_id']
+
+    def resume_batch_run(self, sid, run_id=None):
+        run = self.db.execute('SELECT * FROM batch_runs WHERE session_id=?', (sid,)).fetchone()
+        if not run or (run_id and run['run_id'] != run_id) or run['status'] in ('completed','cancelled'):return []
+        if run['status'] not in ('translating','interrupted','preparing'):return []
+        with self.db:
+            self.db.execute("UPDATE batch_runs SET status='translating',error='',updated_at=? WHERE session_id=?", (utc_now(), sid))
+            self.db.execute("UPDATE translation_batches SET status='pending',claim='',updated_at=? WHERE session_id=? AND run_id=? AND status='translating'",
+                (utc_now(), sid, run['run_id']))
+        return [dict(row) for row in self.db.execute(
+            "SELECT * FROM translation_batches WHERE session_id=? AND run_id=? AND status='pending' ORDER BY ordinal",
+            (sid, run['run_id']))]
+
+    def retry_batch_run(self, sid):
+        run = self.db.execute('SELECT * FROM batch_runs WHERE session_id=?', (sid,)).fetchone()
+        if not run:return None
+        with self.db:
+            self.db.execute("UPDATE batch_runs SET status='translating',error='',updated_at=? WHERE session_id=?", (utc_now(), sid))
+            self.db.execute("UPDATE translation_batches SET status='pending',claim='',error='',updated_at=? WHERE session_id=? AND run_id=? AND status IN ('failed','cancelled','interrupted')",
+                (utc_now(), sid, run['run_id']))
+            self.db.execute("UPDATE segments SET status='queued',error='' WHERE session_id=? AND zh='' AND status IN ('failed','interrupted','disabled')", (sid,))
+        return run['run_id']
+
+    def cancel_batch_run(self, sid):
+        run = self.db.execute('SELECT * FROM batch_runs WHERE session_id=?', (sid,)).fetchone()
+        if not run or run['status'] in ('completed','cancelled'):return None
+        with self.db:
+            self.db.execute("UPDATE batch_runs SET status='cancelled',error='批量翻译已取消，可在历史记录中重试',updated_at=? WHERE session_id=?", (utc_now(), sid))
+            self.db.execute("UPDATE translation_batches SET status='cancelled',claim='',updated_at=? WHERE session_id=? AND run_id=? AND status IN ('pending','translating')",
+                (utc_now(), sid, run['run_id']))
+            self.db.execute("UPDATE segments SET status='interrupted',error='翻译已取消，可在历史记录中重试' WHERE session_id=? AND zh='' AND status IN ('queued','pending','failed','disabled')", (sid,))
+        return run['run_id']
+
+    def disable_file_translation(self, sid):
+        """Keep the plan resumable but show untranslated rows as disabled."""
+        with self.db:
+            self.db.execute("UPDATE batch_runs SET status='interrupted',updated_at=? WHERE session_id=? AND status!='completed'",
+                (utc_now(), sid))
+            self.db.execute("UPDATE translation_batches SET status='pending',claim='',updated_at=? WHERE session_id=? AND status='translating'",
+                (utc_now(), sid))
+            self.db.execute("UPDATE segments SET status='disabled',error='' WHERE session_id=? AND zh='' AND status IN ('queued','pending','interrupted','failed')", (sid,))
+
+    def fail_file_translation(self, sid, error):
+        error = str(error)[:800]
+        with self.db:
+            self.db.execute("UPDATE segments SET status='failed',error=? WHERE session_id=? AND zh='' AND status IN ('queued','pending','interrupted','disabled')", (error, sid))
+            self.db.execute("UPDATE batch_runs SET status='failed',error=?,updated_at=? WHERE session_id=?", (error, utc_now(), sid))
+
+    def finish_batch_run_if_terminal(self, sid, run_id):
+        return self._finish_run_if_terminal(sid, run_id)
+
+    def batch_flag_count(self, sid, run_id=None):
+        sql = "SELECT flags FROM translation_batches WHERE session_id=? AND status='done'"
+        args = [sid]
+        if run_id is not None:
+            sql += ' AND run_id=?'; args.append(run_id)
+        count = 0
+        for row in self.db.execute(sql, args):
+            try:
+                value = json.loads(row['flags'])
+                count += len(value) if isinstance(value, list) else 0
+            except (ValueError, TypeError):
+                continue
+        return count
+
+    def resumable_batch_runs(self):
+        return [dict(row) for row in self.db.execute('''
+            SELECT r.* FROM batch_runs r JOIN file_sessions f ON f.session_id=r.session_id
+            WHERE r.status IN ('translating','interrupted','preparing')
+            ORDER BY r.updated_at''')]
+
     def close(self):
         self.db.close()
 
@@ -264,41 +583,6 @@ def cue_time(ms, separator=','):
 
 
 def export_session(history, sid, path):
-    path = Path(path)
-    session, rows = history.session(sid), history.rows(sid)
-    if not session:
-        raise ValueError('请选择一条历史记录')
-    suffix = path.suffix.lower()
-    if suffix == '.json':
-        path.write_text(json.dumps({'version':1,'session':session,'segments':rows}, ensure_ascii=False,indent=2), 'utf-8')
-    elif suffix == '.csv':
-        def excel_text(value):
-            value = str(value)
-            return "'"+value if value.lstrip().startswith(('=','+','-','@')) else value
-        with path.open('w',encoding='utf-8-sig',newline='') as file:
-            writer = csv.writer(file)
-            writer.writerow(['序号','开始毫秒','结束毫秒','英文','中文','状态','边界待核'])
-            for r in rows:
-                writer.writerow([r['seq'],r['start_ms'],r['end_ms'],excel_text(r['en']),excel_text(r['zh']),r['status'],bool(r['uncertain'])])
-    elif suffix in ('.srt','.vtt'):
-        chunks = ['WEBVTT\n'] if suffix == '.vtt' else []
-        for index,row in enumerate(rows,1):
-            end = max(row['start_ms']+200,row['end_ms'])
-            if index < len(rows) and rows[index]['start_ms'] > row['start_ms']:
-                end = min(end,rows[index]['start_ms'])
-            content = row['en'] + ('\n'+row['zh'] if row['zh'] else '')
-            sep = '.' if suffix == '.vtt' else ','
-            chunks.append(f'{index}\n{cue_time(row["start_ms"],sep)} --> {cue_time(end,sep)}\n{content}\n')
-        path.write_text('\n'.join(chunks), 'utf-8-sig' if suffix == '.srt' else 'utf-8')
-    elif suffix in ('.txt','.md'):
-        blocks = [session['title'], session['created_at'], '']
-        for row in rows:
-            blocks.append(f'[{cue_time(row["start_ms"])}]'+(' [边界待核]' if row['uncertain'] else ''))
-            blocks.append(row['en'])
-            if row['zh']:
-                blocks.append(row['zh'])
-            blocks.append('')
-        path.write_text('\n'.join(blocks), 'utf-8')
-    else:
-        raise ValueError('请选择 TXT、SRT、VTT、CSV 或 JSON 格式')
-    return len(rows)
+    """Legacy single-session entry point; full formatting lives in subtitle_export."""
+    from subtitle_export import export_single_file
+    return export_single_file(history, sid, path)
