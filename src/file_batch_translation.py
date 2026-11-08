@@ -22,11 +22,20 @@ from translation import (TranslationResponseError, TruncatedTranslation,
     http_error_message, parse_structured_translations, reasoning_capability,
     structured_request_payload)
 
-# Approved batch budgets. Reasoning/context/output limits shrink these values
-# for conservative custom providers.
-VISIBLE_SOURCE_TOKENS = 5000
+# Approved source-side batch budgets. These caps are independent: an unused
+# target or side allowance is never reused to exceed another cap. Only source
+# text counts here; approved translations, glossary, system prompt, JSON
+# envelope and model output are separate provider-context overhead.
+PRECEDING_SOURCE_TOKENS = 500
 TARGET_SOURCE_TOKENS = 2000
-SIDE_CONTEXT_TOKENS = 1500
+FOLLOWING_SOURCE_TOKENS = 300
+VISIBLE_SOURCE_TOKENS = (PRECEDING_SOURCE_TOKENS + TARGET_SOURCE_TOKENS
+                         + FOLLOWING_SOURCE_TOKENS)
+PRIOR_TRANSLATION_TOKENS = 600
+MAX_PRIOR_TRANSLATIONS = 6
+# Conservative allowance for system prompt, glossary, prior translations and
+# the JSON envelope when deciding how much source text a provider can accept.
+CONTEXT_OVERHEAD_TOKENS = 1600
 MAX_REQUESTS_PER_BATCH = 5
 MAX_STRICT_RETRIES = 1
 MAX_SPLIT_DEPTH = 2
@@ -146,19 +155,37 @@ def _unit_text(unit):
     return ' '.join(str(row.get('text', row.get('en', ''))).strip() for row in unit['rows'] if str(row.get('text', row.get('en', ''))).strip())
 
 
+def _context_budgets(context_budget):
+    """Split one source-context allowance under the 500/300 caps.
+
+    The preceding side has first claim up to its own cap, then the following
+    side uses what remains up to its cap. Neither side can borrow capacity
+    from the target or exceed its own cap; unavailable context stays absent
+    rather than being padded with placeholder sentences.
+    """
+    available = max(0, min(PRECEDING_SOURCE_TOKENS + FOLLOWING_SOURCE_TOKENS,
+                           int(context_budget)))
+    before = min(PRECEDING_SOURCE_TOKENS, available)
+    after = min(FOLLOWING_SOURCE_TOKENS, available - before)
+    return before, after
+
+
 def provider_budgets(profile):
     cap = reasoning_capability(profile)
     planning_reserve = int(cap.get('planning_reserve', cap.get('response_reserve', 0)))
     usable = max(1024, int(cap['max_output']) - planning_reserve)
-    target = min(TARGET_SOURCE_TOKENS, max(256, int((usable - 256) / 2.4)))
-    # Reserve room for the JSON envelope, system prompt, glossary and prior
-    # translations in addition to the model output.
-    visible = min(VISIBLE_SOURCE_TOKENS, max(1000, int(cap['context_tokens']) - int(cap['max_output']) - 1600))
-    target = min(target, max(256, visible - 400))
-    surrounding = max(0, visible - target)
-    prior = min(SIDE_CONTEXT_TOKENS, surrounding // 2)
-    after = min(SIDE_CONTEXT_TOKENS, surrounding - prior)
-    return {'visible': visible, 'target': target, 'prior': prior, 'after': after,
+    output_target = max(1, int((usable - 256) / 2.4))
+    # Normal defaults are 500 preceding + 2000 target + 300 following source
+    # tokens. Providers with a smaller context shrink the source window, but
+    # never beyond the individual caps. Prompt/JSON/glossary/prior translation
+    # and output overhead are reserved separately from these source caps.
+    source = min(VISIBLE_SOURCE_TOKENS, max(0, int(cap['context_tokens'])
+                 - int(cap['max_output']) - CONTEXT_OVERHEAD_TOKENS))
+    target = min(TARGET_SOURCE_TOKENS, output_target, source)
+    before, after = _context_budgets(max(0, source - target))
+    return {'source': source, 'visible': source, 'target': target,
+            'before': before, 'after': after, 'prior': before,
+            'prior_translation': PRIOR_TRANSLATION_TOKENS,
             'max_output': int(cap['max_output']), 'output_limit': usable,
             'capability': cap}
 
@@ -204,6 +231,29 @@ def _select_context(units, start, end, before_budget, after_budget):
     return before, after
 
 
+def _prior_translations(before_units, limit=PRIOR_TRANSLATION_TOKENS):
+    """Approved translations from the already-sent preceding window only.
+
+    Source text is deliberately omitted: those sentences are already in
+    context_before. Prior pairs therefore add no source tokens outside the
+    selected 500-token preceding allowance.
+    """
+    collected, used = [], 0
+    for unit in reversed(before_units):
+        for row in reversed(unit['rows']):
+            translation = str(row.get('zh', '') or '').strip()
+            if not translation:
+                continue
+            cost = estimate_tokens(translation)
+            if used + cost > limit or len(collected) >= MAX_PRIOR_TRANSLATIONS:
+                break
+            collected.append({'id': row['id'], 'translation': translation})
+            used += cost
+        if used >= limit or len(collected) >= MAX_PRIOR_TRANSLATIONS:
+            break
+    return list(reversed(collected))
+
+
 def _pending(row, only_pending):
     if not only_pending:
         return True
@@ -235,10 +285,14 @@ def plan_batches(rows, profile, domain_bias=None, source_language='auto',
         if not selected:
             index += 1; continue
         first_unit, last_unit = selected[0][0], selected[-1][0]
-        remaining = max(0, budget['visible'] - token_total)
-        prior_budget = min(budget['prior'], remaining // 2)
-        after_budget = min(budget['after'], remaining - prior_budget)
-        before_units, after_units = _select_context(units, first_unit, last_unit + 1, prior_budget, after_budget)
+        # Context is optional and read-only. Provider_budgets has already
+        # shrunk the 500/300 side caps for tight providers; unused target room
+        # is never lent to a side, and remaining source room is only a hard
+        # total guard. An overlong single unit simply leaves no context room.
+        remaining = max(0, budget['source'] - token_total)
+        before_budget = min(budget['before'], remaining)
+        after_budget = min(budget['after'], max(0, remaining - before_budget))
+        before_units, after_units = _select_context(units, first_unit, last_unit + 1, before_budget, after_budget)
         target_items, groups = [], []
         for local, (_unit_index, pending_rows) in enumerate(selected):
             ids = []
@@ -247,21 +301,7 @@ def plan_batches(rows, profile, domain_bias=None, source_language='auto',
                     'hash': text_fingerprint(row.get('en', '')), 'unit': local})
                 ids.append(row['id'])
             groups.append(ids)
-        prior, prior_tokens = [], 0
-        if first_unit:
-            collected = []
-            for unit in reversed(units[max(0, first_unit - 4):first_unit]):
-                for row in reversed(unit['rows']):
-                    if not str(row.get('zh', '') or '').strip():
-                        continue
-                    cost = estimate_tokens(row.get('en', '')) + estimate_tokens(row.get('zh', ''))
-                    if len(collected) >= 6 or prior_tokens + cost > 600:
-                        break
-                    collected.append({'source': row.get('en', ''), 'target': row.get('zh', '')})
-                    prior_tokens += cost
-                if len(collected) >= 6 or prior_tokens >= 600:
-                    break
-            prior = list(reversed(collected))
+        prior = _prior_translations(before_units)
         visible_text = ' '.join(str(row.get('en', '')) for unit in before_units + selected_units(selected) + after_units
                                 for row in unit['rows'])
         glossary, topic = relevant_glossary(domain_bias, visible_text)
@@ -274,7 +314,8 @@ def plan_batches(rows, profile, domain_bias=None, source_language='auto',
             'glossary': glossary, 'topic': topic}
         batches.append({'batch_id': uuid.uuid4().hex, 'items': payload,
             'source_hash': batch_fingerprint(texts),
-            'target_tokens': token_total})
+            'target_tokens': token_total,
+            'source_tokens': token_total + sum(unit['tokens'] for unit in before_units + after_units)})
     return batches
 
 
@@ -322,7 +363,8 @@ def build_system_prompt(target_language, glossary=None, topic='', strict=False, 
         '你是专业多语言字幕译者。把 translate 数组中每个条目的 text 翻译为' + str(target_language) + '。',
         '只输出一个 JSON 对象：{"translations":[{"id":"原 id","text":"译文"}]}。',
         '必须包含 translate 中全部且仅这些 id，每个 id 恰好一次；不得新增、遗漏、重复、合并或拆分条目；不得输出时间戳或额外字段。',
-        'context_before、context_after 和 prior_translated 仅供理解，不翻译、不输出。',
+        'context_before、context_after 和 prior_translated 仅供理解，不翻译、不输出；'
+        'prior_translated 只含已批准译文的 id 与译文。',
         '按原文最可能的语义直译；原文来自 ASR，可能有识别错误。不要解释、不要补充原文没有的信息、不要编造定义。',
         '严格保留数字、单位、正负号、否定词和专名。若语义不确定，宁可保持直译。',
         '不要输出思维过程、分析或推理内容，只输出最终 JSON。',
@@ -340,9 +382,32 @@ def build_system_prompt(target_language, glossary=None, topic='', strict=False, 
 
 def _payload_for(job, start, end, focused=False):
     units = job['units'][start:end]
-    before = list(job['before']) + [_unit_text({'rows': unit}) for unit in job['units'][:start]]
-    after = [_unit_text({'rows': unit}) for unit in job['units'][end:]] + list(job['after'])
+    budgets = job.get('budgets') or {}
+    source_limit = int(budgets.get('source', VISIBLE_SOURCE_TOKENS))
+    before_cap = int(budgets.get('before', PRECEDING_SOURCE_TOKENS))
+    after_cap = int(budgets.get('after', FOLLOWING_SOURCE_TOKENS))
     translate = [{'id': item['id'], 'text': item['text']} for unit in units for item in unit]
+    target_tokens = sum(estimate_tokens(item['text']) for item in translate)
+    before = list(job['before']); after = list(job['after'])
+    before_tokens = sum(estimate_tokens(text) for text in before)
+    after_tokens = sum(estimate_tokens(text) for text in after)
+    # A split half may expose sibling units as optional context. Add them only
+    # inside the per-side caps and the remaining 500/2000/300 source window.
+    room = max(0, source_limit - target_tokens - before_tokens - after_tokens)
+    near_before = []
+    for unit in reversed(job['units'][:start]):
+        text = _unit_text({'rows': unit}); cost = estimate_tokens(text)
+        if before_tokens + cost > before_cap or cost > room:
+            break
+        near_before.append(text); before_tokens += cost; room -= cost
+    near_before.reverse()
+    near_after = []
+    for unit in job['units'][end:]:
+        text = _unit_text({'rows': unit}); cost = estimate_tokens(text)
+        if after_tokens + cost > after_cap or cost > room:
+            break
+        near_after.append(text); after_tokens += cost; room -= cost
+    before += near_before; after = near_after + after
     if focused:
         before = before[-8:]
         after = after[:8]
@@ -362,6 +427,20 @@ def _fit_request(job, payload, strict, focused):
     context_limit = max(256, int(cap['context_tokens']))
     max_output = max(256, int(cap['max_output']))
     allowed = max(256, context_limit - max_output - 256)
+    budgets = job.get('budgets') or {}
+    source_limit = int(budgets.get('source', VISIBLE_SOURCE_TOKENS))
+    target_tokens = sum(estimate_tokens(item.get('text', ''))
+                        for item in payload.get('translate', []))
+    # Source-side caps are independent of prompt/JSON/output overhead. If a
+    # persisted or split payload carries more read-only source context than
+    # allowed, drop context; never trim or merge target cues.
+    while (target_tokens + sum(estimate_tokens(text) for text in
+           payload.get('context_before', []) + payload.get('context_after', [])) > source_limit
+           and (payload.get('context_before') or payload.get('context_after'))):
+        if len(payload.get('context_before', [])) >= len(payload.get('context_after', [])):
+            payload['context_before'].pop(0)
+        else:
+            payload['context_after'].pop()
     glossary = list(payload.get('glossary') or [])
     topic = payload.get('topic', '')
     while True:
@@ -558,6 +637,19 @@ class FileBatchTranslator(QThread):
                 unit_count = end - start
                 target_tokens = sum(estimate_tokens(item['text'])
                     for unit in job['units'][start:end] for item in unit)
+                source_limit = int(job['budgets'].get('source', VISIBLE_SOURCE_TOKENS))
+                if target_tokens > source_limit:
+                    # Never hide a source-window overrun. Multiple natural
+                    # units can be split; one oversized cue cannot be split
+                    # without breaking its ID/timestamp contract.
+                    if unit_count > 1 and depth < MAX_SPLIT_DEPTH:
+                        middle = start + unit_count // 2
+                        subsets.insert(0, (middle, end, depth + 1))
+                        subsets.insert(0, (start, middle, depth + 1))
+                        break
+                    raise BatchTranslationError(
+                        f'目标字幕约 {target_tokens} tokens，超过单批源文预算 '
+                        f'{source_limit}；未发送请求，原文和时间轴保留')
                 projected_output = max(512, int(target_tokens * 2.4 + 256))
                 if projected_output > job['budgets']['output_limit']:
                     if unit_count > 1 and depth < MAX_SPLIT_DEPTH:

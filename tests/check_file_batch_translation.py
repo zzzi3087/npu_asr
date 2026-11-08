@@ -109,9 +109,13 @@ assert long_rows[20]['id'] not in covered
 assert len(planned) >= 2
 for batch in planned:
     payload = batch['items']
-    visible = batch['target_tokens'] + sum(estimate_tokens(text) for text in payload['before'] + payload['after'])
-    assert visible <= 5001, visible
-    assert batch['target_tokens'] <= 2600
+    before_tokens = sum(estimate_tokens(text) for text in payload['before'])
+    after_tokens = sum(estimate_tokens(text) for text in payload['after'])
+    visible = batch['target_tokens'] + before_tokens + after_tokens
+    assert visible <= 2800, visible
+    assert batch['source_tokens'] == visible
+    assert batch['target_tokens'] <= 2000
+    assert before_tokens <= 500 and after_tokens <= 300
     for item in payload['target']:
         assert set(item) == {'id', 'seq', 'hash', 'unit'}
         assert not any('time' in key or 'ms' in key for key in item)
@@ -119,7 +123,7 @@ middle = planned[len(planned)//2]['items']
 assert middle['before'] and middle['after']
 # Read-only context is stored as natural sentences, not cue ID maps.
 assert all(isinstance(text, str) for text in middle['before'] + middle['after'])
-assert middle['prior'] == [] or all(set(pair) == {'source','target'} for pair in middle['prior'])
+assert middle['prior'] == [] or all(set(pair) == {'id','translation'} for pair in middle['prior'])
 # The completed row is visible as approved prior/read-only context when adjacent.
 
 # 2. Provider-specific thinking is explicit; unknown custom services never
@@ -132,7 +136,10 @@ url, headers, body = structured_request_payload(deepseek, 'system', '{}', 900, k
 assert body['thinking'] == {'type': 'enabled'} and body['max_tokens'] >= 900
 assert body['reasoning_effort'] == 'high'
 assert body['model'] == 'deepseek-flash'
-assert provider_budgets(deepseek)['target'] == 2000
+default_budget = provider_budgets(deepseek)
+assert default_budget['target'] == 2000
+assert default_budget['before'] == 500 and default_budget['after'] == 300
+assert default_budget['source'] == default_budget['visible'] == 2800
 for mode, expected in [('low', 'low'), ('medium', 'high'), ('high', 'high'), ('max', 'max')]:
     mode_cap = reasoning_capability(dict(deepseek, reasoning=mode))
     _, _, mode_body = structured_request_payload(dict(deepseek, reasoning=mode),
@@ -189,7 +196,23 @@ except ValueError:
 custom_off = dict(custom, reasoning='off')
 assert not reasoning_capability(custom_off)['error']
 assert '未验证' in capability_status(custom_off)
-assert provider_budgets(custom_off)['target'] < 2000
+custom_budget = provider_budgets(custom_off)
+assert custom_budget['target'] < 2000
+assert 0 < custom_budget['target'] <= custom_budget['source'] <= 2800
+assert custom_budget['before'] <= 500 and custom_budget['after'] <= 300
+# A tighter provider buys source room for the target before optional context.
+import file_batch_translation as file_batch_module
+real_capability = file_batch_module.reasoning_capability
+try:
+    file_batch_module.reasoning_capability = lambda profile: dict(
+        real_capability(profile), context_tokens=4600, max_output=2048)
+    constrained_budget = provider_budgets(custom_off)
+    assert constrained_budget['source'] == 952
+    assert constrained_budget['target'] == 746
+    assert constrained_budget['before'] == 206 and constrained_budget['after'] == 0
+    assert constrained_budget['before'] + constrained_budget['target'] <= constrained_budget['source']
+finally:
+    file_batch_module.reasoning_capability = real_capability
 custom_explicit = dict(custom, reasoning='high',
     extra={'reasoning_effort': 'high', 'temperature': 0.2})
 assert reasoning_capability(custom_explicit)['enabled']
@@ -308,7 +331,8 @@ glossary_rows = [row('g0', 1, 'Previous approved sentence.', zh='上一句已译
     row('g1', 2, 'Schwarzschild metric and axions.')]
 glossary_batch = plan_batches(glossary_rows, base_profile(), default_domain_bias())[0]['items']
 assert 'Schwarzschild' in glossary_batch['glossary']
-assert any(pair['source'] == 'Previous approved sentence.' for pair in glossary_batch['prior'])
+assert glossary_batch['prior'] == [{'id':'g0', 'translation':'上一句已译。'}]
+assert all('source' not in pair for pair in glossary_batch['prior'])
 assert glossary_batch['before'] and 'Previous approved sentence.' in glossary_batch['before'][0]
 assert all('definition' not in term.lower() for term in glossary_batch['glossary'])
 
@@ -329,6 +353,22 @@ except BatchTranslationError as error:
     assert '未发送请求' in str(error)
 assert huge_transport.calls == []
 
+# A single cue larger than the whole 2800-token source window cannot be split
+# without breaking its ID/timestamp contract; fail before any billable request.
+over_rows = [row('over', 1, '字' * 2600)]
+over_plan = plan_batches(over_rows, base_profile())[0]
+assert over_plan['target_tokens'] > 2800
+over_record = {'session_id':'over', 'run_id':'over-run', 'batch_id':'over-batch',
+    'claim':'over-claim', 'items':json.dumps(over_plan['items'], ensure_ascii=False)}
+over_job = job_from_record(over_record, over_rows, base_profile(), 'k', 'auto', '简体中文', None)
+over_transport = FakeTransport(success_handler)
+try:
+    FileBatchTranslator(transport=over_transport)._translate(over_job, None)
+    raise AssertionError('source-window overrun must fail visibly')
+except BatchTranslationError as error:
+    assert '单批源文预算' in str(error) and '未发送请求' in str(error)
+assert over_transport.calls == []
+
 trim_rows = [row('t1', 1, 'Short target sentence.')]
 trim_plan = plan_batches(trim_rows, huge_profile)[0]
 trim_record = {'session_id':'trim', 'run_id':'trim-run', 'batch_id':'trim-batch',
@@ -344,6 +384,98 @@ cap_trim = trim_job['budgets']['capability']
 allowed = cap_trim['context_tokens'] - cap_trim['max_output'] - 256
 assert _json_tokens(fitted) + estimate_tokens(fitted_system) <= allowed + 1
 assert len(fitted['context_before']) + len(fitted['context_after']) < 2
+
+# Outbound mock payloads: the planner's 500/2000/300 source caps must survive
+# into the actual request JSON for start, middle, end, missing-context and
+# constrained-provider cases. Context is never padded and prior translations
+# carry id+translation only (their source is already in context_before).
+def outbound_payloads(rows, profile, domain_bias=None):
+    batches = plan_batches(rows, profile, domain_bias)
+    transport = FakeTransport(success_handler)
+    worker = FileBatchTranslator(transport=transport)
+    for batch in batches:
+        record = {'session_id':batch['batch_id'], 'run_id':'run', 'batch_id':batch['batch_id'],
+            'claim':'claim', 'items':json.dumps(batch['items'], ensure_ascii=False)}
+        job = job_from_record(record, rows, profile, 'k', 'auto', '简体中文', domain_bias)
+        worker._translate(job, None)
+    return batches, [payload_of(call['body']) for call in transport.calls]
+
+payload_rows = [row(f'p{i}', i + 1,
+    f'Outbound payload sentence {i} ' + ('context word ' * 55).strip() + '.')
+    for i in range(60)]
+payload_batches, sent = outbound_payloads(payload_rows, base_profile())
+assert len(payload_batches) >= 3 and len(sent) == len(payload_batches)
+for batch, request in zip(payload_batches, sent):
+    target_tokens = sum(estimate_tokens(item['text']) for item in request['translate'])
+    before_tokens = sum(estimate_tokens(text) for text in request['context_before'])
+    after_tokens = sum(estimate_tokens(text) for text in request['context_after'])
+    assert target_tokens <= 2000
+    assert before_tokens <= 500 and after_tokens <= 300
+    assert target_tokens + before_tokens + after_tokens <= 2800
+    assert request['translate'] and all(item['id'] and item['text'] for item in request['translate'])
+    assert all(str(text).strip() for text in request['context_before'] + request['context_after'])
+    assert all(set(pair) == {'id', 'translation'} for pair in request['prior_translated'])
+    assert all('source' not in pair for pair in request['prior_translated'])
+start_request, middle_request, end_request = sent[0], sent[len(sent)//2], sent[-1]
+assert start_request['context_before'] == [] and start_request['prior_translated'] == []
+assert middle_request['context_before'] and middle_request['context_after']
+assert end_request['context_after'] == []
+
+# Missing context on a one-row file is represented as empty lists, not padding.
+missing_batches, missing_sent = outbound_payloads(
+    [row('solo', 1, 'Standalone sentence.')], base_profile())
+assert len(missing_batches) == len(missing_sent) == 1
+assert missing_sent[0]['context_before'] == []
+assert missing_sent[0]['context_after'] == []
+assert missing_sent[0]['prior_translated'] == []
+
+# Approved prior translations from the preceding window use id+translation,
+# and no extra source is appended outside the selected context.
+prior_rows = [row('prior0', 1, 'Approved preceding sentence.', zh='已批准的前句。', status='done'),
+    row('prior1', 2, 'Target sentence to translate.')]
+prior_batches, prior_sent = outbound_payloads(prior_rows, base_profile())
+assert prior_sent[0]['prior_translated'] == [{'id':'prior0', 'translation':'已批准的前句。'}]
+assert 'Approved preceding sentence.' in prior_sent[0]['context_before'][0]
+
+# A translated row outside the selected 500-token preceding window must not
+# reappear in prior_translated (which would be extra source/payload).
+overflow_rows = [
+    row('far', 1, 'Far approved sentence ' + ('preceding context words ' * 35).strip() + '.',
+        zh='远端旧译。', status='done')]
+for index in range(2, 6):
+    overflow_rows.append(row(f'mid{index}', index,
+        f'Mid approved sentence {index} ' + ('preceding context words ' * 35).strip() + '.',
+        status='done'))
+overflow_rows.append(row('goal', 6, 'Target sentence for the overflow check.'))
+overflow_batch, overflow_sent = outbound_payloads(overflow_rows, base_profile())
+assert len(overflow_batch[0]['items']['before']) == 3
+assert all('Far approved sentence' not in text for text in overflow_batch[0]['items']['before'])
+assert overflow_batch[0]['items']['prior'] == []
+assert overflow_sent[0]['prior_translated'] == []
+
+# Constrained provider: source room shrinks within the caps and the outbound
+# payload never reports the normal 2800-token window as available.
+import file_batch_translation as file_batch_module
+real_capability = file_batch_module.reasoning_capability
+try:
+    file_batch_module.reasoning_capability = lambda profile: dict(
+        real_capability(profile), context_tokens=5000, max_output=2048)
+    constrained_profile = base_profile(reasoning='off', model='conservative-model',
+        base_url='https://custom.example/v1', name='Custom')
+    constrained_budget = provider_budgets(constrained_profile)
+    assert constrained_budget['source'] == 1352
+    assert constrained_budget['target'] == 746
+    assert constrained_budget['before'] == 500 and constrained_budget['after'] == 106
+    constrained_batches, constrained_sent = outbound_payloads(payload_rows, constrained_profile)
+    for request in constrained_sent:
+        target_tokens = sum(estimate_tokens(item['text']) for item in request['translate'])
+        before_tokens = sum(estimate_tokens(text) for text in request['context_before'])
+        after_tokens = sum(estimate_tokens(text) for text in request['context_after'])
+        assert target_tokens <= constrained_budget['target']
+        assert before_tokens <= 500 and after_tokens <= 300
+        assert target_tokens + before_tokens + after_tokens <= constrained_budget['source']
+finally:
+    file_batch_module.reasoning_capability = real_capability
 
 # stop() must end the QThread even when the transport blocks; the abandoned
 # daemon HTTP call cannot keep Qt alive or force terminate().
@@ -650,6 +782,9 @@ finally:
         window.close()
 
 print(json.dumps({'planner_unique_coverage': True, 'budget_trimmed': True,
+    'source_window_500_2000_300': True, 'outbound_payload_caps': True,
+    'prior_id_translation_only': True, 'constrained_provider_shrinks_context': True,
+    'oversize_source_window_rejected': True,
     'natural_readonly_context': True, 'thinking_explicit_provider_fields': True,
     'adaptive_and_legacy_claude': True, 'openai_off_accurate': True,
     'custom_explicit_mechanism': True, 'unknown_custom_never_silent': True,
