@@ -122,17 +122,20 @@ ISCC /DBundleDir="<absolute-path-to-dist/LiveCaptions>" /DReleaseDir="<absolute-
 
 ## 源码目录
 
-```text
-main.py        源码启动入口
-src/           程序代码（界面、音频、模型与翻译）
-native/        C++ 音频增益内核源代码
-tests/         隔离测试与回归检查
-tools/         模型转换和构建辅助工具
-packaging/     Windows 打包配置
-resources/     模型下载清单、图标与公开元数据
-requirements/  运行和转换依赖
-licenses/      第三方许可与版权说明
-```
+| 路径 | 用途 |
+|---|---|
+| [licenses/](licenses/) | 第三方组件的许可证与版权声明 |
+| [native/](native/) | 音频自动增益的 C++ 实现 |
+| [packaging/](packaging/) | Windows 安装包与便携版的构建配置 |
+| [requirements/](requirements/) | 软件运行与模型转换的 Python 依赖 |
+| [resources/](resources/) | 应用图标、模型下载清单与校验信息 |
+| [src/](src/) | 字幕界面、音频转录、翻译与历史记录的实现 |
+| [tests/](tests/) | 转录、翻译、字幕导出与界面的回归测试 |
+| [tools/](tools/) | 模型转换、原生库编译与发布工具 |
+| [.gitignore](.gitignore) | Git 忽略规则：本地配置、模型、缓存与构建产物 |
+| [LICENSE](LICENSE) | 项目许可证：Apache License 2.0 |
+| [main.py](main.py) | 从源码启动实时字幕应用的入口 |
+| [README.md](README.md) | 实时字幕的安装、使用与源码目录指南 |
 
 离线检查：
 
