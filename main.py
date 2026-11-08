@@ -1,4 +1,4 @@
-"""Source checkout entry point. Windows packages use the frozen entry point."""
+"""从源码启动实时字幕。Windows 安装包使用打包时指定的入口。"""
 import sys
 from pathlib import Path
 
