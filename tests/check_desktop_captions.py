@@ -77,12 +77,30 @@ assert overlay.height()>height
 overlay.configure(dict(base,locked=False));settle()
 assert not overlay.windowFlags() & Qt.WindowType.WindowTransparentForInput
 positions=[];overlay.position_changed.connect(positions.append)
-pt=QPointF(20,20);global_point=QPointF(overlay.mapToGlobal(pt.toPoint()))
+def press(point):
+    global_pos=QPointF(overlay.mapToGlobal(point.toPoint()))
+    overlay.mousePressEvent(QMouseEvent(QMouseEvent.Type.MouseButtonPress,point,global_pos,Qt.MouseButton.LeftButton,Qt.MouseButton.LeftButton,Qt.KeyboardModifier.NoModifier))
+press(QPointF(2,2));assert overlay._drag is None
+def alpha_point(alpha):
+    image=overlay._image
+    return next(QPointF(x+.5,y+.5)/image.devicePixelRatio() for y in range(image.height())
+        for x in range(image.width()) if image.pixelColor(x,y).alpha()==alpha)
+pt=alpha_point(1);global_point=QPointF(overlay.mapToGlobal(pt.toPoint()))
 overlay.mousePressEvent(QMouseEvent(QMouseEvent.Type.MouseButtonPress,pt,global_point,Qt.MouseButton.LeftButton,Qt.MouseButton.LeftButton,Qt.KeyboardModifier.NoModifier))
 overlay.mouseMoveEvent(QMouseEvent(QMouseEvent.Type.MouseMove,pt,global_point+QPointF(20,-30),Qt.MouseButton.NoButton,Qt.MouseButton.LeftButton,Qt.KeyboardModifier.NoModifier))
+drag_pos=overlay.pos();overlay.set_pairs([('Changed during drag','拖动时更新')]);settle()
+assert overlay.pos()==drag_pos
 overlay.mouseReleaseEvent(QMouseEvent(QMouseEvent.Type.MouseButtonRelease,pt,global_point+QPointF(20,-30),Qt.MouseButton.LeftButton,Qt.MouseButton.NoButton,Qt.KeyboardModifier.NoModifier))
 settle();assert positions and positions[0]['x']==overlay.options['x']
 assert qt.primaryScreen().availableGeometry().contains(overlay.geometry())
+overlay.configure(base);overlay.set_pairs([]);settle()
+overlay.begin_adjustment();settle();assert overlay.isVisible() and overlay.options['locked']
+assert not overlay.windowFlags() & Qt.WindowType.WindowTransparentForInput
+press(QPointF(2,2));assert overlay._drag is None
+pt=alpha_point(255);press(pt);assert overlay._drag is not None
+overlay.mouseReleaseEvent(QMouseEvent(QMouseEvent.Type.MouseButtonRelease,pt,QPointF(overlay.mapToGlobal(pt.toPoint())),
+    Qt.MouseButton.LeftButton,Qt.MouseButton.NoButton,Qt.KeyboardModifier.NoModifier))
+settle();assert not overlay.adjusting and overlay.windowFlags() & Qt.WindowType.WindowTransparentForInput
 overlay.configure(dict(base,x=-50000,bottom=50000));settle()
 assert qt.primaryScreen().availableGeometry().contains(overlay.geometry())
 overlay.configure(base);overlay.set_pairs(SAMPLE_PAIRS);settle(300)

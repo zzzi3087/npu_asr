@@ -46,6 +46,11 @@ try:
     failed=w.history.add(sid,'Dark matter scattering.',1000,2000,status='queued')
     w.render_now();settle()
     assert not any(text in w.browser.toPlainText() for text in ('等待翻译','翻译中','未启用','不可用'))
+    w.hide_source.setChecked(True);w.capturing=True;w.last_partial='Unconfirmed original.'
+    w.refresh_desktop();settle()
+    assert w.desktop._key[:2]==((('', '轴子是暗物质候选者。'),),'')
+    assert 'Dark matter scattering.' not in w.browser.toPlainText()
+    w.capturing=False
     w.pump(sid);until(lambda:w.history.segment(failed)['status']=='failed');settle(180)
     assert request_count==1 and 'Dark matter scattering.' in w.browser.toPlainText()
     assert 'HTTP 401' not in w.browser.toPlainText() and '密钥无效' not in w.browser.toPlainText()
@@ -70,6 +75,30 @@ try:
     assert '暗物质散射。' in w.browser.toPlainText() and 'Dark matter scattering.' not in w.browser.toPlainText()
     assert w.desktop._key[0][-1]==('', '暗物质散射。')
     assert w.history.segment(first)['en']=='Axions are dark matter candidates.'
+    latest=w.history.add(sid,'Neutrinos oscillate.',2000,3000,status='pending')
+    w.render_now();settle()
+    assert w.desktop._key[0]==(('', '暗物质散射。'),)
+    assert 'Neutrinos oscillate.' not in w.browser.toPlainText()
+    # Opt in to the pending-source fallback on both surfaces, then replace it.
+    from settings_dialog import SettingsDialog
+    dialog=SettingsDialog(w.settings,w)
+    assert not dialog.show_pending_source.isChecked()
+    dialog.show_pending_source.setChecked(True)
+    selected=dialog.draft()
+    assert selected['show_pending_source'] is True
+    dialog.close()
+    w.settings['show_pending_source']=True
+    save_settings(w.settings)
+    assert load_settings()['show_pending_source'] is True
+    w.render_now();settle()
+    assert 'Neutrinos oscillate.' in w.browser.toPlainText()
+    assert w.desktop._key[0][-1]==('Neutrinos oscillate.','')
+    w.hide_translation.setChecked(True);settle()
+    assert not w.browser.toPlainText().strip() and not w.desktop.isVisible()
+    w.hide_translation.setChecked(False);settle()
+    w.on_translation(sid,latest,'中微子会振荡。',True);settle(180)
+    assert w.desktop._key[0][-1]==('', '中微子会振荡。')
+    assert '中微子会振荡。' in w.browser.toPlainText() and 'Neutrinos oscillate.' not in w.browser.toPlainText()
     # Raw overlay drawing contains no branding or live-preview labels.
     w.hide_source.setChecked(False);settle()
     drawn=[];original=w.desktop._text_path
@@ -90,16 +119,18 @@ try:
             position=control.mapTo(w,QPoint());assert position.x()>=0 and position.x()+control.width()<=w.width()
     config=folder/'config.json';export_configuration(w.settings,config)
     imported=import_configuration(config);assert (imported['show_source'],imported['show_translation'])==(True,True)
-    invalid=copy.deepcopy(w.settings);invalid['show_source']='false'
+    assert imported['show_pending_source'] is True
+    assert validate_configuration({})['show_pending_source'] is False
+    invalid=copy.deepcopy(w.settings);invalid['show_pending_source']='false'
     try:validate_configuration(invalid);raise AssertionError('non-boolean option accepted')
     except ValueError:pass
     # Stored old API errors remain in diagnostics, never in caption text.
-    w.history.update(failed,'failed',error='Translation service unavailable')
+    w.history.update(latest,'failed',error='Translation service unavailable')
     w.set_translation_status(None);w.render_now();settle()
     assert w.translation_warning.isVisible() and 'unavailable' not in w.browser.toPlainText()
     w.settings['translate']=False;w.render_now();assert not w.translation_warning.isVisible()
     print(json.dumps(dict(shared_visibility_controls=True,all_four_visibility_modes=True,
-        missing_translation_falls_back_to_source=True,api_outage_footer_only=True,api_recovery_clears_warning=True,
+        pending_source_hidden=True,pending_source_opt_in_and_replacement=True,failed_translation_falls_back_to_source=True,api_outage_footer_only=True,api_recovery_clears_warning=True,
         persistent_choices_and_config_roundtrip=True,original_history_preserved=True,overlay_has_no_prefix=True,
         small_window_fits=True,unchanged_captions_skip_redraw=True,fixture_http_requests=request_count),indent=2))
 finally:

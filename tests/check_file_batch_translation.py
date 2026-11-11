@@ -303,7 +303,7 @@ assert duplicate_state['calls'] == 2
 assert set(dup_result['translations']) == {r['id'] for r in truncate_rows}
 
 flags = suspicious_flags({'a':'The mass is 5 kg.','b':'No signal was seen.'},
-    {'a':'质量是 5 公斤。','b':'信号被看到。'})
+    {'a':'质量是 5 克。','b':'信号被看到。'})
 assert {flag['kind'] for flag in flags} == {'unit','negation'}
 
 # One focused anchoring retry is issued for a suspect quantity/unit batch,
@@ -318,7 +318,7 @@ focus_calls = {'n': 0}
 def focus_handler(body):
     focus_calls['n'] += 1
     payload = payload_of(body); ident = payload['translate'][0]['id']
-    text = '质量是 5 公斤。' if focus_calls['n'] == 1 else '质量是 5 kg。'
+    text = '质量是 5 克。' if focus_calls['n'] == 1 else '质量是 5 kg。'
     return FakeResponse(openai_response([{'id':ident, 'text':text}]))
 focus_result = FileBatchTranslator(transport=FakeTransport(focus_handler))._translate(focus_job, None)
 assert focus_calls['n'] == 2
