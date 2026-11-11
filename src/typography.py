@@ -63,6 +63,7 @@ class CaptionFormatter:
         self.fonts={kind:make_font(self.t,kind,settings[kind+'_size']) for kind in ('english','chinese')}
         self.meta_font=make_font(self.t,'ui',max(10,self.t['ui_size']-2))
         self.show_source,self.show_translation=caption_visibility(settings)
+        self.show_pending_source=settings.get('show_pending_source') is True
 
     def insert_row(self,cursor,row,first=False,new_block=False):
         t=self.t
@@ -79,7 +80,7 @@ class CaptionFormatter:
             else:cursor.insertBlock(fmt,char)
             cursor.insertText(text,char)
             count+=1
-        source,translation=visible_caption_pair(row['en'],row['zh'],self.show_source,self.show_translation)
+        source,translation=visible_caption_pair(row['en'],row['zh'],self.show_source,self.show_translation,status=row.get('status'),show_pending_source=self.show_pending_source)
         if not source and not translation:return 0
         seconds=max(0,row['start_ms']//1000)
         stamp=f'{seconds//60:02d}:{seconds%60:02d}'

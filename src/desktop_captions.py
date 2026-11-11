@@ -31,6 +31,9 @@ class DesktopCaptions(QWidget):
         self.partial='';self.live_active=False
         self.show_source=self.show_translation=True
         self._key=None;self._image=QImage();self._glyphs=OrderedDict();self._drag=None
+        self.adjusting=False
+        self._adjust_timeout=QTimer(self,singleShot=True,interval=20000)
+        self._adjust_timeout.timeout.connect(self.end_adjustment)
         self.rebuild_count=0;self.paint_count=0
         self._watched_screens=set()
         for screen in QGuiApplication.screens():self._watch_screen(screen)
@@ -41,16 +44,34 @@ class DesktopCaptions(QWidget):
     def configure(self,options,preview=False):
         options=normalize_desktop_captions(options)
         old=self.options;self.options=options;self.preview=preview
-        if old.get('locked')!=options['locked']:
-            self.setWindowFlag(Qt.WindowType.WindowTransparentForInput,options['locked'])
+        if not options['enabled'] or old.get('locked')!=options['locked']:
+            self._drag=None;self.adjusting=False;self._adjust_timeout.stop()
+        self._sync_input()
         if old.get('topmost')!=options['topmost']:
             self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint,options['topmost'])
         if any(old.get(k)!=options[k] for k in ('source_font','translation_font','source_size','translation_size','preview_font','preview_size','bold')):
             self._glyphs.clear()
         self.request_refresh()
 
+    def _sync_input(self):
+        passthrough=self.options['locked'] and not self.adjusting
+        if bool(self.windowFlags() & Qt.WindowType.WindowTransparentForInput)!=passthrough:
+            self.setWindowFlag(Qt.WindowType.WindowTransparentForInput,passthrough)
+        if passthrough:self.unsetCursor()
+        else:self.setCursor(Qt.CursorShape.ClosedHandCursor if self._drag is not None else Qt.CursorShape.OpenHandCursor)
+
+    def begin_adjustment(self):
+        if self._shutdown or not self.options['enabled']:return
+        self.adjusting=True;self._sync_input();self._adjust_timeout.start()
+        self.request_refresh()
+
+    def end_adjustment(self):
+        if not self.adjusting:return
+        self._adjust_timeout.stop();self.adjusting=False;self._drag=None
+        self._sync_input();self.request_refresh()
+
     def set_pairs(self,pairs):
-        pairs=tuple((str(en).strip()[:8192],str(zh).strip()[:8192]) for en,zh in pairs if str(en).strip() or str(zh).strip())
+        pairs=tuple((str(en).strip()[:8192],str(zh).strip()[:8192]) for en,zh in pairs)
         if pairs==self.pairs:return
         self.pairs=pairs;self.request_refresh()
 
@@ -135,20 +156,25 @@ class DesktopCaptions(QWidget):
     def _rebuild(self):
         self._pending=False
         if self._shutdown or not self.options['enabled']:self.hide();return
+        if self._drag is not None:return
         pairs=self.pairs[-self.options['sentence_count']:]
         sample=self.preview or (not self.options['locked'] and not self.live_active)
-        if not pairs and sample:pairs=SAMPLE_PAIRS[-self.options['sentence_count']:]
-        pairs=tuple(pair for source,translation in pairs
-            if any(pair:=visible_caption_pair(source,translation,self.show_source,self.show_translation)))
+        if not pairs and sample:
+            pairs=tuple(visible_caption_pair(source,translation,self.show_source,self.show_translation)
+                for source,translation in SAMPLE_PAIRS[-self.options['sentence_count']:])
+        pairs=tuple(pair for pair in pairs if any(pair))
         live=self.partial if self.live_active else ('This sentence is still being recognized.' if sample else '')
         if not self.show_source:live=''
         if not self.options['preview_enabled']:live=''
-        if not pairs and not live:self.hide();return
+        movable=self.adjusting or not self.options['locked']
+        if not pairs and not live:
+            if self.adjusting:live='拖动这行文字调整位置'
+            else:self.hide();return
         screen=self._screen();area=screen.availableGeometry()
         width=min(self.options['width'],max(160,area.width()-32));max_height=max(80,area.height()-32)
         dpr=self.devicePixelRatioF()
         drawing=tuple((k,v) for k,v in self.options.items() if k not in ('enabled','topmost','screen','x','bottom'))
-        key=(pairs,live,drawing,width,max_height,dpr)
+        key=(pairs,live,drawing,width,max_height,dpr,self.adjusting)
         self._building=True
         try:
             if key!=self._key:
@@ -173,14 +199,16 @@ class DesktopCaptions(QWidget):
                 painter=QPainter(image);painter.setRenderHint(QPainter.RenderHint.Antialiasing)
                 painter.translate(width*(1-scale)/2,0);painter.scale(scale,scale)
                 pen=QPen(QColor(self.options['outline_color']),2*self.options['outline_width'],Qt.PenStyle.SolidLine,Qt.PenCapStyle.RoundCap,Qt.PenJoinStyle.RoundJoin)
+                if movable:
+                    # Windows routes mouse input through pixels with zero alpha.
+                    # Extend only the glyph outlines, by three logical screen pixels.
+                    halo=QPen(QColor(0,0,0,1),pen.widthF()+6/scale,
+                        Qt.PenStyle.SolidLine,Qt.PenCapStyle.RoundCap,Qt.PenJoinStyle.RoundJoin)
                 for path,color,top in blocks:
                     painter.save();painter.translate(padding,top)
+                    if movable:painter.strokePath(path,halo)
                     if self.options['outline_width']:painter.strokePath(path,pen)
                     painter.fillPath(path,color);painter.restore()
-                painter.resetTransform()
-                if not self.options['locked']:
-                    painter.setPen(QPen(QColor(self.options['outline_color']),1,Qt.PenStyle.DashLine))
-                    painter.setBrush(Qt.BrushStyle.NoBrush);painter.drawRect(1,1,width-3,height-3)
                 painter.end();self._image=image;self._key=key;self.rebuild_count+=1
                 self.resize(width,height);self.update()
             x=self.options['x'];bottom=self.options['bottom']
@@ -205,19 +233,31 @@ class DesktopCaptions(QWidget):
         return result
 
     def mousePressEvent(self,event):
-        if not self.options['locked'] and event.button()==Qt.MouseButton.LeftButton:
-            self._drag=event.globalPosition().toPoint()-self.pos();event.accept()
+        if (self.adjusting or not self.options['locked']) and event.button()==Qt.MouseButton.LeftButton:
+            pixel=event.position()*self._image.devicePixelRatio()
+            x,y=math.floor(pixel.x()),math.floor(pixel.y())
+            if not self._image.valid(x,y) or self._image.pixelColor(x,y).alpha()==0:
+                event.ignore();return
+            self._adjust_timeout.stop()
+            self._drag=event.globalPosition().toPoint()-self.pos()
+            self.setCursor(Qt.CursorShape.ClosedHandCursor);event.accept()
 
     def mouseMoveEvent(self,event):
         if self._drag is not None:self.move(event.globalPosition().toPoint()-self._drag);event.accept()
 
     def mouseReleaseEvent(self,event):
         if self._drag is not None and event.button()==Qt.MouseButton.LeftButton:
-            self._drag=None;screen=QGuiApplication.screenAt(self.geometry().center()) or self._screen()
-            position=dict(x=self.x(),bottom=self.y()+self.height(),screen=screen.name())
-            self.options.update(position);self.position_changed.emit(position);self.request_refresh();event.accept()
+            self._drag=None;screen=QGuiApplication.screenAt(event.globalPosition().toPoint()) or self._screen()
+            area=screen.availableGeometry()
+            x=max(area.left(),min(self.x(),area.right()+1-self.width()))
+            y=max(area.top(),min(self.y(),area.bottom()+1-self.height()))
+            position=dict(x=x,bottom=y+self.height(),screen=screen.name())
+            self.options.update(position)
+            self.end_adjustment();self._sync_input()
+            self.position_changed.emit(position);self.request_refresh();event.accept()
 
     def contextMenuEvent(self,event):
+        if self.adjusting:self.end_adjustment();event.accept();return
         if self.options['locked']:return
         menu=QMenu(self)
         menu.addAction('锁定位置并穿透鼠标').triggered.connect(lambda:self.locked_requested.emit(True))
@@ -225,7 +265,7 @@ class DesktopCaptions(QWidget):
         menu.exec(event.globalPos())
 
     def shutdown(self):
-        self._shutdown=True;self.close()
+        self._shutdown=True;self._adjust_timeout.stop();self.close()
 
     def closeEvent(self,event):
         if not self._shutdown:self.enabled_requested.emit(False)

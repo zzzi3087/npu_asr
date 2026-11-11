@@ -1,7 +1,7 @@
 import copy,uuid
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (QWidget,QVBoxLayout,QHBoxLayout,QFormLayout,QLabel,QComboBox,QLineEdit,
-    QPlainTextEdit,QPushButton,QCheckBox,QDoubleSpinBox)
+    QPlainTextEdit,QPushButton,QCheckBox,QDoubleSpinBox,QTableWidget,QTableWidgetItem,QHeaderView)
 from domain_bias import normalize_domain_bias,model_bias
 
 
@@ -35,6 +35,19 @@ class DomainEditor(QWidget):
         self.terms.setPlaceholderText('每行一个完整术语或名称，例如：\nSchwarzschild\nKaluza-Klein\nXENONnT')
         form.addRow('术语 / 完整词组',self.terms)
         self.counter=QLabel();self.counter.setObjectName('muted');self.counter.setWordWrap(True);form.addRow(self.counter)
+        self.translation_enabled=QCheckBox('翻译使用当前领域首选译名（与转录增强独立）')
+        form.addRow(self.translation_enabled)
+        self.preferred_names=QTableWidget(0,3)
+        self.preferred_names.setHorizontalHeaderLabels(['目标语言','原文术语','首选译名'])
+        self.preferred_names.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.preferred_names.setMinimumHeight(140)
+        form.addRow('双语首选译名',self.preferred_names)
+        preferred_note=QLabel('目标语言须与翻译设置一致，例如“简体中文”。仅原文中出现的术语生效；已有转录词组保持不变。')
+        preferred_note.setWordWrap(True);preferred_note.setObjectName('muted');form.addRow(preferred_note)
+        preferred_buttons=QHBoxLayout()
+        for title,method in [('添加译名',self.add_preferred_name),('删除选中译名',self.remove_preferred_name)]:
+            button=QPushButton(title);button.clicked.connect(method);preferred_buttons.addWidget(button)
+        form.addRow(preferred_buttons)
         self.flags={}
         for key,label in [('parakeet','Parakeet v2：英文词组加权（实验）'),('parakeet_v3','Parakeet v3：多语言词组加权（实验）'),('qwen','Qwen：背景与术语提示'),('mega','Mega：背景与术语提示（单独对照效果）')]:
             field=QCheckBox(label);self.flags[key]=field;form.addRow(field)
@@ -60,11 +73,24 @@ class DomainEditor(QWidget):
     def schedule_counter(self):
         if not self.loading:self.timer.start()
 
+    def add_preferred_name(self,*_):
+        row=self.preferred_names.rowCount();self.preferred_names.insertRow(row)
+        for column in range(3):self.preferred_names.setItem(row,column,QTableWidgetItem(''))
+        self.preferred_names.setCurrentCell(row,0)
+
+    def remove_preferred_name(self,*_):
+        rows={item.row() for item in self.preferred_names.selectedItems()}
+        for row in sorted(rows,reverse=True):self.preferred_names.removeRow(row)
+
     def stash(self):
         if self.current is None or self.loading:return
         p=next(p for p in self.config['profiles'] if p['id']==self.current)
         p.update(name=self.name.text().strip(),background=self.background.toPlainText().strip(),
             terms=[s.strip() for s in self.terms.toPlainText().splitlines() if s.strip()])
+        # Keep all rows until values() validates, including incomplete edits.
+        p['_preferred_rows']=[[self.preferred_names.item(row,col).text().strip()
+            if self.preferred_names.item(row,col) else '' for col in range(3)]
+            for row in range(self.preferred_names.rowCount())]
         index=self.selector.findData(self.current)
         if index>=0:self.selector.setItemText(index,p['name'] or '未命名领域')
 
@@ -74,6 +100,10 @@ class DomainEditor(QWidget):
         if self.current is None:return
         p=next(p for p in self.config['profiles'] if p['id']==self.current)
         self.loading=True;self.name.setText(p['name']);self.background.setPlainText(p['background']);self.terms.setPlainText('\n'.join(p['terms']))
+        rows=p.get('_preferred_rows',[[language,source,target] for language,mapping in p.get('preferred_names',{}).items() for source,target in mapping.items()])
+        self.preferred_names.setRowCount(len(rows))
+        for row,values in enumerate(rows):
+            for col,text in enumerate(values):self.preferred_names.setItem(row,col,QTableWidgetItem(text))
         self.loading=False;self.remove_button.setEnabled(len(self.config['profiles'])>1);self.update_counter()
 
     def set_values(self,value):
@@ -82,6 +112,7 @@ class DomainEditor(QWidget):
         for p in self.config['profiles']:self.selector.addItem(p['name'],p['id'])
         self.selector.setCurrentIndex(self.selector.findData(self.config['active']))
         for key,field in self.flags.items():field.setChecked(self.config[key])
+        self.translation_enabled.setChecked(self.config['translation_enabled'])
         self.strength.setValue(self.config['strength']);self.loading=False;self.switch()
 
     def add(self,*_):
@@ -110,6 +141,17 @@ class DomainEditor(QWidget):
     def values(self,model_id=None):
         self.stash();value=copy.deepcopy(self.config);value['active']=self.current
         value.update({key:field.isChecked() for key,field in self.flags.items()});value['strength']=self.strength.value()
+        value['translation_enabled']=self.translation_enabled.isChecked()
+        for profile in value['profiles']:
+            if '_preferred_rows' not in profile:continue
+            mapping={};seen=set()
+            for language,source,target in profile.pop('_preferred_rows'):
+                if not any((language,source,target)):continue
+                if not all((language,source,target)):raise ValueError('首选译名每行须填写目标语言、原文术语与译名')
+                key=(language.casefold(),source.casefold())
+                if key in seen:raise ValueError('同一目标语言存在重复原文术语')
+                seen.add(key);mapping.setdefault(language,{})[source]=target
+            profile['preferred_names']=mapping
         value=normalize_domain_bias(value,strict=True)
         if model_id:validate_context(value,model_id)
         return value

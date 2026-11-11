@@ -416,6 +416,13 @@ class TruncatedTranslation(TranslationResponseError):
         super().__init__(message, incomplete=True)
 
 
+class MissingTranslations(TranslationResponseError):
+    def __init__(self, missing, accepted):
+        super().__init__(f'响应缺少 {len(missing)} 个目标 ID', incomplete=True)
+        self.accepted = accepted
+        self.missing = set(missing)
+
+
 def response_text(protocol, data):
     """Final answer only: reasoning/thinking blocks and reasoning_content are ignored."""
     if protocol == 'anthropic':
@@ -467,11 +474,15 @@ def _decode_loose_json(text):
     return {'translations':pairs} if pairs else None
 
 
-def parse_structured_translations(protocol, data, expected_ids):
+def parse_structured_translations(protocol, data, expected_ids, *, recover_partial=False):
     expected = list(dict.fromkeys(str(ident) for ident in expected_ids))
-    if response_truncated(protocol, data):
-        raise TruncatedTranslation('模型输出因长度限制被截断')
+    truncated = response_truncated(protocol, data)
+    if truncated and not recover_partial:raise TruncatedTranslation()
     text = response_text(protocol, data)
+    if truncated:
+        # Only retain entries from an intact JSON document in a length-limited reply.
+        try:json.loads(text)
+        except (ValueError,TypeError):raise TruncatedTranslation() from None
     if not text.strip():
         raise TranslationResponseError('服务返回了空的翻译文本', incomplete=True)
     document = _decode_loose_json(text)
@@ -500,12 +511,15 @@ def parse_structured_translations(protocol, data, expected_ids):
             raise TranslationResponseError('响应包含未请求的 ID：'+ident[:80])
         if ident in seen:
             raise TranslationResponseError('响应包含重复 ID：'+ident[:80])
+        seen.add(ident)
+        if recover_partial and isinstance(value,str) and not value.strip():continue
         if not isinstance(value,str) or not value.strip():
             raise TranslationResponseError('响应包含空译文：'+ident[:80])
-        seen.add(ident); result[ident] = value.strip()
-    missing = [ident for ident in expected if ident not in seen]
+        result[ident] = value.strip()
+    missing = [ident for ident in expected if ident not in result]
     if missing:
-        raise TranslationResponseError('响应缺少 '+str(len(missing))+' 个目标 ID', incomplete=True)
+        raise MissingTranslations(missing, result)
+    if truncated:raise TruncatedTranslation()
     return result
 
 

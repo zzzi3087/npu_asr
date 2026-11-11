@@ -46,7 +46,7 @@ def validate_configuration(value):
             raise ValueError('数值超出范围：'+key)
         if key!='interval':result[key]=int(number)
     for key in ('translate','topmost','quiet','show_source','show_translation','close_to_tray','minimize_to_tray',
-        'progressive_translation','final_delivery_enabled'):
+        'progressive_translation','final_delivery_enabled','show_pending_source'):
         if type(result[key]) is not bool:raise ValueError('布尔参数无效：'+key)
     if result['interval'] not in (.5,.75,1.,1.5,2.):raise ValueError('预览间隔须为 0.5、0.75、1、1.5 或 2 秒')
     if type(result['progressive_translation_limit']) is not int or not 1<=result['progressive_translation_limit']<=10:

@@ -5,10 +5,10 @@ def caption_visibility(settings):
         for key in ('show_source','show_translation'))
 
 
-def visible_caption_pair(source,translation,show_source=True,show_translation=True):
+def visible_caption_pair(source,translation,show_source=True,show_translation=True,*,status=None,show_pending_source=False):
     source=str(source or '').strip();translation=str(translation or '').strip()
     translated=translation if show_translation else ''
-    # A missing translation must not erase the only readable caption. An
-    # explicit choice to hide both languages still hides all caption content.
-    original=source if show_source or (show_translation and not translated) else ''
+    # Pending-source fallback is opt in; confirmed service failures remain readable.
+    fallback=show_translation and not translation and (status=='failed' or show_pending_source)
+    original=source if show_source or fallback else ''
     return original,translated

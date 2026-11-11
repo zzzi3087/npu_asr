@@ -65,6 +65,7 @@ class FileQueueDialog(QDialog):
         self.cancel_button=QPushButton('取消当前');self.cancel_button.clicked.connect(window.cancel_file);buttons.addWidget(self.cancel_button)
         buttons.addStretch()
         self.open_button=QPushButton('查看字幕');self.open_button.clicked.connect(self.open_result);buttons.addWidget(self.open_button)
+        self.review_button=QPushButton('核对疑似译文');self.review_button.clicked.connect(self.open_review);buttons.addWidget(self.review_button)
         edits=QHBoxLayout();layout.addLayout(edits)
         self.retry_button=QPushButton('重试转录');self.retry_button.clicked.connect(lambda:self.queue.retry(self.selected()));edits.addWidget(self.retry_button)
         self.translate_cancel_button=QPushButton('取消翻译')
@@ -163,6 +164,7 @@ class FileQueueDialog(QDialog):
             and self.window.settings.get('translate')))
         for button in (self.up_button,self.down_button):button.setEnabled(bool(job and job['status']=='queued'))
         self.open_button.setEnabled(bool(job and job.get('session') and self.window.history.session(job['session'])))
+        self.review_button.setEnabled(bool(job and job.get('session') and self.window.history.session(job['session'])))
         if not job:
             self.details.setText('选择任务可查看响度、峰值、采样率和预处理结果。');return
         lines=[job['name']+' · '+LABELS.get(job['status'],'')]
@@ -190,6 +192,10 @@ class FileQueueDialog(QDialog):
         job=self.queue.find(self.selected())
         if job and job.get('session'):
             self.window.start_file_translation(job['session'],retry_failed=True);self.refresh()
+
+    def open_review(self):
+        job=self.queue.find(self.selected())
+        if job and job.get('session'):self.window.open_file_review(job['session'])
 
     def open_result(self):
         job=self.queue.find(self.selected())

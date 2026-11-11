@@ -2,7 +2,7 @@
 import math,re,uuid
 
 def default_domain_bias():
-    return {'active':'physics-en','parakeet':False,'parakeet_v3':False,'qwen':False,'mega':False,'strength':1.2,'profiles':[
+    return {'active':'physics-en','translation_enabled':False,'parakeet':False,'parakeet_v3':False,'qwen':False,'mega':False,'strength':1.2,'profiles':[
         {'id':'physics-en','name':'物理学 · 英语','background':'Particle physics, theoretical physics and astrophysics.',
          'terms':['Schwarzschild','Feynman','Kaluza-Klein','axions','weakly interacting massive particles','neutrino oscillation','quantum field theory','quantum chromodynamics','Higgs boson','Lorentz symmetry','AdS/CFT','renormalization']},
         {'id':'physics-zh','name':'物理学 · 中文','background':'高能物理、理论物理与天体物理。',
@@ -22,7 +22,7 @@ def normalize_domain_bias(value=None,strict=False):
         if value is None:return default_domain_bias()
         if not isinstance(value,dict):raise ValueError('领域词表配置必须是对象')
         result=default_domain_bias()
-        for key in ('parakeet','parakeet_v3','qwen','mega'):
+        for key in ('parakeet','parakeet_v3','qwen','mega','translation_enabled'):
             v=value.get(key,False)
             if type(v) is not bool:raise ValueError('领域增强开关必须是布尔值')
             result[key]=v
@@ -48,7 +48,25 @@ def normalize_domain_bias(value=None,strict=False):
             if len(background)+sum(map(len,clean))>4096:raise ValueError('领域背景与词表总长度过长')
             if any(tag in background+'\n'+'\n'.join(clean) for tag in ('<|im_start|>','<|im_end|>','<|audio','<asr_text>','<|endoftext|>')):
                 raise ValueError('领域词表不能包含模型控制标记')
-            result['profiles'].append({'id':ident,'name':name.strip(),'background':background.strip(),'terms':clean})
+            preferred=profile.get('preferred_names',{})
+            if not isinstance(preferred,dict) or len(preferred)>32:raise ValueError('首选译名须按目标语言分组，最多 32 种语言')
+            preferred_clean={};entry_count=0;preferred_size=0
+            for language,mapping in preferred.items():
+                if not isinstance(language,str) or not 1<=len(language.strip())<=80 or '\n' in language or '\r' in language:raise ValueError('首选译名目标语言无效')
+                language=language.strip()
+                if language.casefold() in {key.casefold() for key in preferred_clean} or not isinstance(mapping,dict):raise ValueError('首选译名语言重复或格式无效')
+                target={};seen_sources=set()
+                for source,preferred_name in mapping.items():
+                    for item in (source,preferred_name):
+                        if not isinstance(item,str) or not 1<=len(item.strip())<=160 or '\n' in item or '\r' in item:raise ValueError('原文与首选译名须为非空单行文字，最长 160 字符')
+                        if any(tag in item for tag in ('<|im_start|>','<|im_end|>','<|audio','<asr_text>','<|endoftext|>')):raise ValueError('首选译名不能包含模型控制标记')
+                    source=source.strip();preferred_name=preferred_name.strip()
+                    if source.casefold() in seen_sources:raise ValueError('同一目标语言存在重复原文术语')
+                    seen_sources.add(source.casefold());target[source]=preferred_name
+                    entry_count+=1;preferred_size+=len(source)+len(preferred_name)
+                preferred_clean[language]=target
+            if entry_count>256 or preferred_size>16384:raise ValueError('首选译名最多 256 对，总长度最多 16384 字符')
+            result['profiles'].append({'id':ident,'name':name.strip(),'background':background.strip(),'terms':clean,'preferred_names':preferred_clean})
             ids.add(ident);names.add(name.strip().casefold())
         result['active']=value.get('active',result['profiles'][0]['id'])
         if result['active'] not in ids:raise ValueError('所选领域不存在')
@@ -77,3 +95,30 @@ def model_bias(value,model_id):
         return {'context':'','terms':terms,'strength':config['strength']}
     if model_id=='parakeet-v3':return {'context':'','terms':profile['terms'],'strength':config['strength']}
     return {'context':build_context(profile),'terms':[],'strength':0.}
+
+
+def domain_translation_glossary(value, text, target_language, limit=24, max_chars=1200):
+    """Explicit preferred names for the active, translation-enabled domain only.
+
+    Target language labels are matched exactly (ignoring case/outer whitespace).
+    ASR vocabulary and previously generated translations never imply a mapping.
+    """
+    try:
+        config,profile=active_domain(value)
+    except (ValueError,TypeError,KeyError):
+        return []
+    if not config['translation_enabled'] or not isinstance(text,str) or not isinstance(target_language,str):return []
+    target_key=target_language.strip().casefold()
+    mapping=next((names for language,names in profile.get('preferred_names',{}).items()
+                  if language.casefold()==target_key),{})
+    found=[];used=0
+    for source,preferred in mapping.items():
+        pattern=re.escape(source)
+        if source[0].isascii() and source[0].isalnum():pattern=r'(?<![A-Za-z0-9_])'+pattern
+        if source[-1].isascii() and source[-1].isalnum():pattern+=r'(?![A-Za-z0-9_])'
+        if not re.search(pattern,text,re.I):continue
+        cost=len(source)+len(preferred)
+        if len(found)>=max(0,limit):break
+        if used+cost>max_chars:continue
+        found.append({'source':source,'preferred':preferred});used+=cost
+    return found

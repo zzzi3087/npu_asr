@@ -25,7 +25,7 @@ def row_identity(row):
 
 
 def row_signature(row):
-    return tuple(row.get(k) for k in SIGNATURE_FIELDS)
+    return tuple(row.get(k) for k in SIGNATURE_FIELDS)+(row.get('status')=='failed',)
 
 
 class CaptionView(QTextBrowser):
@@ -179,7 +179,7 @@ class CaptionView(QTextBrowser):
     def _style_key(colors,settings):
         t=normalize_typography(settings.get('typography'))
         return (tuple(sorted(colors.items())),tuple(sorted(t.items())),
-            caption_visibility(settings),settings.get('english_size'),settings.get('chinese_size'))
+            caption_visibility(settings),settings.get('show_pending_source') is True,settings.get('english_size'),settings.get('chinese_size'))
 
     def _full_rebuild(self,rows,colors,settings):
         self.setUpdatesEnabled(False)
@@ -250,7 +250,8 @@ class CaptionView(QTextBrowser):
 
     def _row_has_blocks(self,row):
         source,translation=visible_caption_pair(row['en'],row['zh'],
-            self._formatter.show_source,self._formatter.show_translation)
+            self._formatter.show_source,self._formatter.show_translation,status=row.get('status'),
+            show_pending_source=self._formatter.show_pending_source)
         return bool(source or translation)
 
     def _replace_row(self,index,row,first):

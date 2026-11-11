@@ -11,14 +11,14 @@ import re
 import threading
 import time
 import uuid
-from collections import Counter
 
 import requests
 from PySide6.QtCore import QThread, Signal
 
-from domain_bias import active_domain
+from domain_bias import active_domain, domain_translation_glossary
+from physical_quantities import quantities
 from storage import batch_fingerprint, text_fingerprint
-from translation import (TranslationResponseError, TruncatedTranslation,
+from translation import (TranslationResponseError, TruncatedTranslation, MissingTranslations,
     http_error_message, parse_structured_translations, reasoning_capability,
     structured_request_payload)
 
@@ -90,13 +90,11 @@ _HTTP_SLOT = _HttpSlot()
 _CJK_RE = re.compile(r'[぀-ヿ㐀-䶿一-鿿가-힯฀-๿]')
 _WORD_RE = re.compile(r"[A-Za-z0-9]+(?:['’\-][A-Za-z0-9]+)*")
 _SENTENCE_END_RE = re.compile(r'[.!?。！？…](?:["\'”’)\]}」』〉》]*)$')
-_NUMBER_RE = re.compile(r'(?<![\w.])[-+]?\d+(?:[.,]\d+)*(?:[eE][-+]?\d+)?%?')
-_UNIT_RE = re.compile(
-    r'(?<![A-Za-z])(?:%|‰|°C|°F|km/s|km/h|km|cm|mm|µm|nm|kg|mg|µg|'
-    r'm/s|m|Hz|kHz|MHz|GHz|eV|keV|MeV|GeV|TeV|K|Pa|hPa|atm|L|mL|min|h|s)(?![A-Za-z])', re.I)
 _NEGATION_RE = re.compile(
     r"\b(?:not|no|never|none|neither|nor|cannot|can't|don't|doesn't|didn't|isn't|aren't|"
     r"won't|without)\b|不|没|無|无|未|非", re.I)
+_UPPER_BOUND = re.compile(r'\bupper (?:limits?|bounds?)\b|上限|上界', re.I)
+_LOWER_BOUND = re.compile(r'\blower (?:limits?|bounds?)\b|下限|下界', re.I)
 
 
 class BatchTranslationError(ValueError):
@@ -261,19 +259,25 @@ def _pending(row, only_pending):
 
 
 def plan_batches(rows, profile, domain_bias=None, source_language='auto',
-                 target_language='简体中文', only_pending=True):
+                 target_language='简体中文', only_pending=True, cue_id=None):
     """Plan contiguous natural-sentence batches covering each pending ID once."""
     units = sentence_units(rows)
+    if cue_id is not None:
+        index = next((i for i,row in enumerate(rows) if row['id']==cue_id),None)
+        if index is None:return []
+        units = sentence_units(rows[:index])+sentence_units(rows[index:index+1])+sentence_units(rows[index+1:])
+    def wanted(row):
+        return row['id']==cue_id if cue_id is not None else _pending(row,only_pending)
     budget = provider_budgets(profile)
     batches = []
     index = 0
     while index < len(units):
-        if not any(_pending(row, only_pending) for row in units[index]['rows']):
+        if not any(wanted(row) for row in units[index]['rows']):
             index += 1
             continue
         selected, token_total = [], 0
         while index < len(units):
-            pending_rows = [row for row in units[index]['rows'] if _pending(row, only_pending)]
+            pending_rows = [row for row in units[index]['rows'] if wanted(row)]
             if not pending_rows:
                 break
             addition = sum(estimate_tokens(row.get('en', '')) for row in pending_rows)
@@ -301,7 +305,8 @@ def plan_batches(rows, profile, domain_bias=None, source_language='auto',
                     'hash': text_fingerprint(row.get('en', '')), 'unit': local})
                 ids.append(row['id'])
             groups.append(ids)
-        prior = _prior_translations(before_units)
+        prior = _prior_translations([{'rows':[r for r in unit['rows'] if
+            (not r.get('target_language') or r['target_language']==target_language)]} for unit in before_units])
         visible_text = ' '.join(str(row.get('en', '')) for unit in before_units + selected_units(selected) + after_units
                                 for row in unit['rows'])
         glossary, topic = relevant_glossary(domain_bias, visible_text)
@@ -310,7 +315,8 @@ def plan_batches(rows, profile, domain_bias=None, source_language='auto',
         payload = {'target': target_items, 'units': groups,
             'before': [_unit_text(unit) for unit in before_units],
             'after': [_unit_text(unit) for unit in after_units],
-            'prior': prior,
+            'prior': prior, 'before_ids': [row['id'] for unit in before_units for row in unit['rows']],
+            'preferred_names': domain_translation_glossary(domain_bias, visible_text, target_language),
             'glossary': glossary, 'topic': topic}
         batches.append({'batch_id': uuid.uuid4().hex, 'items': payload,
             'source_hash': batch_fingerprint(texts),
@@ -325,12 +331,12 @@ def selected_units(selected):
 
 
 def job_from_record(record, rows, profile, key, source_language, target_language,
-                    domain_bias=None):
+                    domain_bias=None, history=None):
     payload = record.get('payload') if isinstance(record, dict) and isinstance(record.get('payload'), dict) else None
     if payload is None:
         raw = record.get('items', '{}') if isinstance(record, dict) else record
         payload = json.loads(raw) if isinstance(raw, str) else raw
-    by_id = {row['id']: row for row in rows}
+    by_id = rows if isinstance(rows,dict) else {row['id']: row for row in rows}
     target = []
     for item in payload.get('target', []):
         row = by_id.get(item['id'])
@@ -349,11 +355,30 @@ def job_from_record(record, rows, profile, key, source_language, target_language
     topic = payload.get('topic', '')
     if glossary is None:
         glossary, topic = relevant_glossary(domain_bias, visible_text)
+    prior = list(payload.get('prior', []))
+    if history is not None:
+        before_ids = payload.get('before_ids')
+        if before_ids is None:
+            # Legacy plans stored text only. Match the saved preceding sentences
+            # from the boundary backwards, without borrowing unrelated history.
+            before_ids = []
+            pos = target[0]['seq']
+            nearby = history.rows_before(record['session_id'],pos,PRECEDING_SOURCE_TOKENS)
+            for saved in reversed(payload.get('before', [])):
+                parts=[]
+                while nearby and len(' '.join(parts)) < len(saved):
+                    row=nearby.pop();parts.insert(0,row['en'].strip());before_ids.append(row['id'])
+                if ' '.join(parts)!=saved:
+                    before_ids=[];break
+        latest = history.rows_by_ids(record['session_id'],before_ids)
+        prior = _prior_translations([{'rows':[r for r in latest if r['status']=='done' and
+            (not r.get('target_language') or r['target_language']==target_language)]}])
     return {'session_id': record['session_id'], 'run_id': record['run_id'],
         'batch_id': record['batch_id'], 'claim': record.get('claim', ''),
         'target': target, 'units': units,
         'before': list(payload.get('before', [])), 'after': list(payload.get('after', [])),
-        'prior': list(payload.get('prior', [])), 'glossary': list(glossary or []), 'topic': topic,
+        'prior': prior, 'glossary': list(glossary or []), 'topic': topic,
+        'preferred_names': payload.get('preferred_names', []),
         'source_language': source_language, 'target_language': target_language,
         'profile': dict(profile), 'key': key, 'budgets': provider_budgets(profile)}
 
@@ -373,6 +398,7 @@ def build_system_prompt(target_language, glossary=None, topic='', strict=False, 
         lines.append('术语（仅当原文出现时使用，不要添加原文没有的定义）：' + '、'.join(glossary) + '。')
     if topic:
         lines.append('领域背景（仅供理解，不要补充原文没有的内容）：' + topic)
+    lines.append('sentence_groups 标明同一句中的字幕 ID。先结合整句理解，再按各条原文分配译文；允许以逗号结尾，勿提前译出下一条的结论。')
     if strict:
         lines.append('上一次响应未通过严格校验；请重新生成完整 JSON，并确保 id 完全对应。')
     if focused:
@@ -380,13 +406,14 @@ def build_system_prompt(target_language, glossary=None, topic='', strict=False, 
     return '\n'.join(lines)
 
 
-def _payload_for(job, start, end, focused=False):
+def _payload_for(job, start, end, focused=False, only_ids=None):
     units = job['units'][start:end]
     budgets = job.get('budgets') or {}
     source_limit = int(budgets.get('source', VISIBLE_SOURCE_TOKENS))
     before_cap = int(budgets.get('before', PRECEDING_SOURCE_TOKENS))
     after_cap = int(budgets.get('after', FOLLOWING_SOURCE_TOKENS))
-    translate = [{'id': item['id'], 'text': item['text']} for unit in units for item in unit]
+    translate = [{'id': item['id'], 'text': item['text']} for unit in units for item in unit
+                 if only_ids is None or item['id'] in only_ids]
     target_tokens = sum(estimate_tokens(item['text']) for item in translate)
     before = list(job['before']); after = list(job['after'])
     before_tokens = sum(estimate_tokens(text) for text in before)
@@ -411,10 +438,38 @@ def _payload_for(job, start, end, focused=False):
     if focused:
         before = before[-8:]
         after = after[:8]
-    return {'source_language': job['source_language'], 'target_language': job['target_language'],
+    payload = {'source_language': job['source_language'], 'target_language': job['target_language'],
         'glossary': job['glossary'], 'topic': job['topic'],
         'context_before': before, 'context_after': after,
-        'prior_translated': job['prior'], 'translate': translate}
+        'prior_translated': list(job['prior']), 'translate': translate}
+    grouped = [[row['id'] for row in unit if only_ids is None or row['id'] in only_ids] for unit in units]
+    payload['sentence_groups'] = [ids for ids in grouped if len(ids)>1]
+    if only_ids is not None:
+        # Associate read-only neighbours with their cue even for disjoint repairs.
+        all_rows = [row for unit in units for row in unit]
+        remaining = [before_cap, after_cap]
+        room = max(0,source_limit-target_tokens)
+        neighbours = []
+        for index,row in enumerate(all_rows):
+            if row['id'] not in only_ids:continue
+            for side,offset in enumerate((-1,1)):
+                pos=index+offset
+                if not 0<=pos<len(all_rows) or all_rows[pos]['id'] in only_ids:continue
+                value=all_rows[pos]['text']; cost=estimate_tokens(value)
+                if cost<=remaining[side] and cost<=room:
+                    neighbours.append({'for':row['id'],('before','after')[side]:value})
+                    remaining[side]-=cost;room-=cost
+        if neighbours:payload['cue_context']=neighbours
+        # Give the adjacent cue precedence over distant context on each side.
+        for side,(context,cost) in enumerate(((before,before_tokens),(after,after_tokens))):
+            allowance=min(remaining[side],room)
+            while context and cost>allowance:
+                cost-=estimate_tokens(context.pop(0 if side==0 else -1))
+                if side==0:payload['prior_translated']=[]
+            room-=cost
+    if job.get('preferred_names'):
+        payload['preferred_names']=job['preferred_names']
+    return payload
 
 
 def _json_tokens(value):
@@ -439,29 +494,46 @@ def _fit_request(job, payload, strict, focused):
            and (payload.get('context_before') or payload.get('context_after'))):
         if len(payload.get('context_before', [])) >= len(payload.get('context_after', [])):
             payload['context_before'].pop(0)
+            payload['prior_translated']=[]
         else:
             payload['context_after'].pop()
     glossary = list(payload.get('glossary') or [])
+    preferred_names = list(payload.get('preferred_names') or [])
     topic = payload.get('topic', '')
     while True:
+        if preferred_names or 'preferred_names' in payload:
+            excerpts = [row['text'] for row in payload['translate']]
+            excerpts.extend(payload['context_before']+payload['context_after'])
+            excerpts.extend(row.get('before',row.get('after','')) for row in payload.get('cue_context',[]))
+            visible = ' '.join(excerpts)
+            payload['preferred_names']=[entry for entry in preferred_names if _term_present(entry['source'],visible)]
         payload['glossary'] = glossary
         payload['topic'] = topic
         system = build_system_prompt(job['target_language'], glossary, topic,
             strict=strict, focused=focused)
+        if payload.get('preferred_names'):
+            system+='\npreferred_names 是用户在此领域和目标语言指定的首选译名；在语义匹配时优先于参考译文。'
+        if payload.get('cue_context'):
+            system+='\ncue_context 仅提供对应字幕前后的原文供参考。'
         total = estimate_tokens(system) + _json_tokens(payload) + 128
         if total <= allowed:
             return payload, system
         # Context is read-only. Drop the farthest sentence first; prior
         # translations, glossary and topic come after that.
-        if payload['context_before'] or payload['context_after']:
+        if payload.get('cue_context'):
+            payload['cue_context'].pop()
+        elif payload['context_before'] or payload['context_after']:
             if len(payload['context_before']) >= len(payload['context_after']):
                 payload['context_before'].pop(0)
+                payload['prior_translated']=[]
             else:
                 payload['context_after'].pop()
         elif payload['prior_translated']:
             payload['prior_translated'].pop(0)
         elif glossary:
             glossary.pop()
+        elif payload.get('preferred_names'):
+            preferred_names=payload['preferred_names'][:-1]
         elif topic:
             topic = ''
         else:
@@ -473,20 +545,24 @@ def suspicious_flags(sources, translations):
     flags = []
     for ident, source in sources.items():
         target = translations.get(ident, '')
-        source_numbers = Counter(_NUMBER_RE.findall(source))
-        target_numbers = Counter(_NUMBER_RE.findall(target))
+        source_numbers,source_units = quantities(source)
+        target_numbers,target_units = quantities(target)
         if source_numbers != target_numbers:
             flags.append({'id': ident, 'kind': 'quantity',
                 'source': source[:120], 'target': target[:120]})
-        source_units = {value.casefold() for value in _UNIT_RE.findall(source)}
-        target_units = {value.casefold() for value in _UNIT_RE.findall(target)}
         if source_units != target_units:
             flags.append({'id': ident, 'kind': 'unit',
                 'source': source[:120], 'target': target[:120]})
         if bool(_NEGATION_RE.search(source)) != bool(_NEGATION_RE.search(target)):
             flags.append({'id': ident, 'kind': 'negation',
                 'source': source[:120], 'target': target[:120]})
-    return flags[:50]
+        # Flag an explicit reversal; absence of a known expression in a third
+        # language provides no evidence about its upper/lower direction.
+        bounds = lambda text: (bool(_UPPER_BOUND.search(text)),bool(_LOWER_BOUND.search(text)))
+        original,translated = bounds(source),bounds(target)
+        if sum(original)==sum(translated)==1 and original!=translated:
+            flags.append({'id':ident,'kind':'bound','source':source[:120],'target':target[:120]})
+    return flags
 
 
 class FileBatchTranslator(QThread):
@@ -630,7 +706,7 @@ class FileBatchTranslator(QThread):
         subsets = [(0, len(job['units']), 0)]
         while subsets:
             start, end, depth = subsets.pop(0)
-            attempts = 0; output_scale = 1.0
+            attempts = 0; output_scale = 1.0; only_ids = None
             while True:
                 if cancel is not None and cancel.is_set():
                     raise BatchCancelled('批量翻译已取消')
@@ -665,12 +741,22 @@ class FileBatchTranslator(QThread):
                 requests_made += 1
                 try:
                     part = self._request(job, start, end, strict=attempts > 0 or depth > 0,
-                        focused=False, output_scale=output_scale, cancel=cancel)
+                        focused=False, output_scale=output_scale, cancel=cancel, only_ids=only_ids)
                     results.update(part)
                     break
+                except MissingTranslations as error:
+                    if error.accepted and requests_made < MAX_REQUESTS_PER_BATCH:
+                        results.update(error.accepted)
+                        only_ids = error.missing
+                        attempts = 1
+                        continue
+                    if attempts < MAX_STRICT_RETRIES and requests_made < MAX_REQUESTS_PER_BATCH:
+                        attempts += 1
+                        continue
+                    raise BatchTranslationError(str(error)) from None
                 except (TruncatedTranslation, TranslationResponseError) as error:
                     unit_count = end - start
-                    if getattr(error, 'incomplete', False) and unit_count > 1 and depth < MAX_SPLIT_DEPTH:
+                    if only_ids is None and getattr(error, 'incomplete', False) and unit_count > 1 and depth < MAX_SPLIT_DEPTH:
                         middle = start + unit_count // 2
                         subsets.insert(0, (middle, end, depth + 1))
                         subsets.insert(0, (start, middle, depth + 1))
@@ -698,10 +784,11 @@ class FileBatchTranslator(QThread):
                 raise BatchCancelled('批量翻译已取消')
             requests_made += 1
             try:
+                flagged_ids={flag['id'] for flag in flags}
                 focused = self._request(job, 0, len(job['units']), strict=True,
-                    focused=True, output_scale=1.2, cancel=cancel)
-                if set(focused) == expected:
-                    results = focused
+                    focused=True, output_scale=1.2, cancel=cancel, only_ids=flagged_ids)
+                if set(focused) == flagged_ids:
+                    results.update(focused)
                     flags = suspicious_flags(sources, results)
             except (BatchTranslationError, TranslationResponseError):
                 pass
@@ -710,8 +797,8 @@ class FileBatchTranslator(QThread):
         return {'translations': results, 'flags': flags, 'requests': requests_made,
                 'target_tokens': sum(estimate_tokens(text) for text in sources.values())}
 
-    def _request(self, job, start, end, strict, focused, output_scale, cancel):
-        payload = _payload_for(job, start, end, focused=focused)
+    def _request(self, job, start, end, strict, focused, output_scale, cancel, only_ids=None):
+        payload = _payload_for(job, start, end, focused=focused, only_ids=only_ids)
         expected = [item['id'] for item in payload['translate']]
         source_tokens = sum(estimate_tokens(item['text']) for item in payload['translate'])
         max_tokens = max(512, min(job['budgets']['max_output'],
@@ -748,5 +835,5 @@ class FileBatchTranslator(QThread):
                 data = response.json()
             except (ValueError, TypeError):
                 raise TranslationResponseError('响应不是有效 JSON', incomplete=True) from None
-            return parse_structured_translations(job['profile']['protocol'], data, expected)
+            return parse_structured_translations(job['profile']['protocol'], data, expected, recover_partial=True)
         raise last_error or BatchTranslationError('翻译请求失败')

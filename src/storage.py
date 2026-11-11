@@ -54,7 +54,7 @@ def final_delivery_words(value=35):
 
 def default_settings():
     return {'version': 3, 'main_layout_version':2, 'selected_profile': 'deepseek', 'translate': True,
-        'show_source':True,'show_translation':True,'progressive_translation':True,'progressive_translation_limit':2,'progressive_translation_interval':1.,
+        'show_source':True,'show_translation':True,'show_pending_source':False,'progressive_translation':True,'progressive_translation_limit':2,'progressive_translation_interval':1.,
         'close_to_tray':True,'minimize_to_tray':True,
         'asr_model':'parakeet','source_language':'auto','target_language':'简体中文','agc':dict(DEFAULT_AGC),'feature_backend':'numpy','domain_bias':default_domain_bias(),'desktop_captions':default_desktop_captions(),
         'english_size': 24, 'chinese_size': 22, 'opacity': 100, 'topmost': False,
@@ -92,6 +92,7 @@ def load_settings(directory=DATA):
     defaults['desktop_captions']=normalize_desktop_captions(defaults.get('desktop_captions'))
     defaults['audio_source']=normalize_audio_source(saved.get('audio_source'),legacy=defaults.get('microphone_name',''))
     defaults['show_source'],defaults['show_translation']=caption_visibility(defaults)
+    if type(defaults['show_pending_source']) is not bool:defaults['show_pending_source']=False
     for key in ('close_to_tray','minimize_to_tray','progressive_translation'):
         if type(defaults[key]) is not bool:defaults[key]=True
     defaults['progressive_translation_limit']=preview_limit(defaults.get('progressive_translation_limit'))
@@ -389,10 +390,10 @@ class History:
         row = self.db.execute(sql, args).fetchone()
         return {key:int(row[key] or 0) for key in ('total','done','failed','cancelled','pending')}
 
-    def pending_batches(self, sid, run_id):
+    def pending_batches(self, sid, run_id, limit=-1):
         return [dict(row) for row in self.db.execute(
-            "SELECT * FROM translation_batches WHERE session_id=? AND run_id=? AND status='pending' ORDER BY ordinal",
-            (sid, run_id))]
+            "SELECT * FROM translation_batches WHERE session_id=? AND run_id=? AND status='pending' ORDER BY ordinal LIMIT ?",
+            (sid, run_id, limit))]
 
     def release_batch_claim(self, sid, run_id, batch_id, claim):
         with self.db:
@@ -549,6 +550,52 @@ class History:
 
     def finish_batch_run_if_terminal(self, sid, run_id):
         return self._finish_run_if_terminal(sid, run_id)
+
+    def apply_review_translation(self, sid, ident, text, flags, *, expected_source, expected_translation, expected_run_id):
+        text = str(text).strip()
+        if not text: return False
+        with self.db:
+            run = self.batch_run(sid); row = self.segment(ident)
+            if not run or run['run_id'] != expected_run_id or run['status'] not in ('completed','failed'): return False
+            if not row or row['session_id'] != sid or row['en'] != expected_source or row['zh'] != expected_translation: return False
+            self.db.execute("UPDATE segments SET zh=?,status='done',error='' WHERE id=? AND session_id=?", (text, ident, sid))
+            self.replace_review_flags(sid, ident, flags)
+        return True
+
+    def review_cues(self, sid):
+        """Current suspect cues, grouped by cue and ordered by source timestamp."""
+        grouped = {}
+        for batch in self.db.execute("SELECT flags FROM translation_batches WHERE session_id=? AND status='done'", (sid,)):
+            try: flags = json.loads(batch['flags'])
+            except (ValueError, TypeError): continue
+            if not isinstance(flags, list): continue
+            for flag in flags:
+                if not isinstance(flag, dict): continue
+                ident = flag.get('id')
+                row = self.segment(ident)
+                if not row or row['session_id'] != sid: continue
+                if ident not in grouped: grouped[ident] = dict(row, flags=[])
+                grouped[ident]['flags'].append(flag)
+        return sorted(grouped.values(), key=lambda row: (row['start_ms'], row['seq']))
+
+    def replace_review_flags(self, sid, ident, flags):
+        """Replace only one cue's flags without disturbing neighbouring reviews."""
+        with self.db:
+            batches = self.db.execute('SELECT batch_id,flags FROM translation_batches WHERE session_id=?', (sid,)).fetchall()
+            destination = None
+            for batch in batches:
+                try: old = json.loads(batch['flags'])
+                except (ValueError, TypeError): old = []
+                if not isinstance(old, list): old = []
+                retained = [flag for flag in old if not isinstance(flag, dict) or flag.get('id') != ident]
+                if len(retained) != len(old):
+                    destination = batch['batch_id']
+                    self.db.execute('UPDATE translation_batches SET flags=? WHERE session_id=? AND batch_id=?',
+                        (json.dumps(retained, ensure_ascii=False), sid, batch['batch_id']))
+            if flags and destination:
+                row = self.db.execute('SELECT flags FROM translation_batches WHERE session_id=? AND batch_id=?', (sid, destination)).fetchone()
+                self.db.execute('UPDATE translation_batches SET flags=? WHERE session_id=? AND batch_id=?',
+                    (json.dumps(json.loads(row['flags']) + flags, ensure_ascii=False), sid, destination))
 
     def batch_flag_count(self, sid, run_id=None):
         sql = "SELECT flags FROM translation_batches WHERE session_id=? AND status='done'"

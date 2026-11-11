@@ -142,6 +142,10 @@ class SettingsDialog(QDialog):
         self.progressive=QCheckBox('临时字幕与预译 · 确认后替换')
         self.progressive.setChecked(settings.get('progressive_translation',True))
         self.progressive.setToolTip('有效句号立即临时显示并尝试预译，句号改变时可修订或撤销。自然从句在约 3 秒且前缀稳定后显示，无标点约 6 秒兜底。原文显示独立于翻译是否可用；确认后的整句译文成功后替换。下次收音生效。')
+        self.show_pending_source=QCheckBox('隐藏原文时，翻译完成前暂时显示原文')
+        self.show_pending_source.setChecked(settings.get('show_pending_source') is True)
+        self.show_pending_source.setToolTip('同时用于历史记录与桌面字幕。关闭时等待译文；开启时先显示原文，译文完成后替换。翻译明确失败时仍显示原文。')
+        form.addRow(self.show_pending_source)
         form.insertRow(1,self.progressive)
         self.progressive_limit=QSpinBox();self.progressive_limit.setRange(1,10)
         self.progressive_limit.setValue(settings.get('progressive_translation_limit',2));self.progressive_limit.setSuffix(' 次')
@@ -500,6 +504,7 @@ class SettingsDialog(QDialog):
         result['desktop_captions']=self.desktop_editor.values()
         result['audio_source']=self.audio_source_editor.values()
         result.update(selected_profile=self.current['id'],translate=self.enabled.isChecked(),
+            show_pending_source=self.show_pending_source.isChecked(),
             progressive_translation=self.progressive.isChecked(),
             progressive_translation_limit=self.progressive_limit.value(),
             progressive_translation_interval=self.progressive_interval.value(),
@@ -531,6 +536,7 @@ class SettingsDialog(QDialog):
         self.switch_profile()
         self.enabled.setChecked(settings['translate']);self.opacity.setValue(settings['opacity'])
         self.progressive.setChecked(settings.get('progressive_translation',True))
+        self.show_pending_source.setChecked(settings.get('show_pending_source') is True)
         self.progressive_limit.setValue(settings.get('progressive_translation_limit',2))
         self.progressive_interval.setValue(settings.get('progressive_translation_interval',1.))
         self.topmost.setChecked(settings['topmost']);self.quiet.setChecked(settings['quiet'])

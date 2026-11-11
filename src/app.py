@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (QApplication,QMainWindow,QWidget,QFrame,QLabel,QP
 from storage import DATA,History,load_settings,save_settings,export_session,cue_time
 from translation import Translator,get_key,validate_profile,reasoning_capability
 from file_batch_translation import FileBatchTranslator,plan_batches,job_from_record
+from file_review_dialog import FileReviewDialog
 from audio_worker import AudioWorker
 from settings_dialog import SettingsDialog
 from desktop_captions import DesktopCaptions
@@ -25,7 +26,7 @@ from history_row import HistoryRow
 from workspace_header import WorkspaceHeader
 from languages import ASR_MODELS,source_languages,source_language_for_model,label as language_label
 from app_paths import RESOURCE_DIR
-from caption_visibility import caption_visibility
+from caption_visibility import caption_visibility,visible_caption_pair
 from tray_controller import TrayController
 from file_queue import FileQueue,LABELS as FILE_LABELS
 from progressive_captions import DraftCaptions
@@ -107,6 +108,8 @@ class Window(QMainWindow):
         self.file_batches.start()
         self.batch_active_runs={}
         self.batch_contexts={}
+        self.review_requests={}
+        self.review_dialogs={}
         self.build_ui()
         self.tray=TrayController(self)
         self.refresh_sessions()
@@ -169,6 +172,8 @@ class Window(QMainWindow):
         self.sessions.itemSelectionChanged.connect(self.sync_history_selection)
         self.history_menu=QMenu(self)
         self.history_rename=self.history_menu.addAction('重命名')
+        self.history_review=self.history_menu.addAction('核对疑似译文')
+        self.history_review.triggered.connect(lambda:self.open_file_review(self.history_menu_sid))
         self.history_delete=self.history_menu.addAction('删除')
         self.history_rename.triggered.connect(lambda:self.rename_session(self.history_menu_sid))
         self.history_delete.triggered.connect(lambda:self.delete_session(self.history_menu_sid))
@@ -492,13 +497,21 @@ class Window(QMainWindow):
 
     def refresh_desktop(self):
         if self.closing:return
-        self.desktop.set_visibility(*caption_visibility(self.settings))
+        visibility=caption_visibility(self.settings)
+        self.desktop.set_visibility(*visibility)
         if not self.desktop.options['enabled']:return
         sid=self.current_session if self.capturing else self.view_session
         rows=self.history.rows(sid,self.desktop.options['sentence_count']) if sid else []
         rows=self.drafts.rows(sid,rows)[-self.desktop.options['sentence_count']:]
-        self.desktop.set_pairs([(row['en']+(' …' if row.get('provisional') else ''),
-            row['zh']+(' …' if row.get('provisional') and row['zh'] else '')) for row in rows])
+        pairs=[]
+        for row in rows:
+            source,translation=visible_caption_pair(row['en'],row['zh'],*visibility,status=row.get('status'),
+                show_pending_source=self.settings.get('show_pending_source') is True)
+            if row.get('provisional'):
+                if source:source+=' …'
+                if translation:translation+=' …'
+            pairs.append((source,translation))
+        self.desktop.set_pairs(pairs)
         self.refresh_desktop_partial()
 
     def refresh_desktop_partial(self):
@@ -627,7 +640,9 @@ class Window(QMainWindow):
         for item,row in self.history_rows.values():row.set_selected(item.isSelected())
 
     def open_history_menu(self,sid,button):
-        if not self.history.session(sid):return
+        session=self.history.session(sid)
+        if not session:return
+        self.history_review.setVisible(session.get('kind')=='file')
         self.history_menu_sid=sid
         self.history_delete.setEnabled(not ((self.capturing or self.file_queue.active) and sid==self.current_session))
         self.history_menu.popup(button.mapToGlobal(button.rect().bottomRight()))
@@ -972,9 +987,82 @@ class Window(QMainWindow):
             self.pump(sid)
             if self.translator.jobs.full():break
 
+    def open_file_review(self,sid):
+        if not sid:return
+        dialog=self.review_dialogs.get(sid)
+        if dialog is None:
+            file_job=self.file_queue.job_for_session(sid) or {}
+            dialog=FileReviewDialog(self,sid,file_job.get('path',''))
+            dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+            self.review_dialogs[sid]=dialog
+            dialog.finished.connect(lambda _result:self.review_dialogs.pop(sid,None))
+        dialog.show();dialog.raise_();dialog.activateWindow()
+
+    def refresh_review_cues(self,sid):
+        dialog=self.review_dialogs.get(sid)
+        if dialog:dialog.refresh()
+
+    def review_cue_saved(self,sid):
+        count=self.history.batch_flag_count(sid)
+        self.file_queue.translation_update(sid,{'translation_flags':count})
+        self.refresh_review_cues(sid)
+        self.render()
+
+    def cancel_review_cue(self,sid,ident):
+        for token,ctx in list(self.review_requests.items()):
+            if (ctx['sid'],ctx['id'])==(sid,ident):
+                self.review_requests.pop(token)
+                self.file_batches.cancel_run(sid,token)
+
+    def request_file_cue_translation(self,sid,ident):
+        dialog=self.review_dialogs.get(sid)
+        try:
+            run=self.history.batch_run(sid);row=self.history.segment(ident)
+            if not self.settings.get('translate'):raise ValueError('请先在设置中启用翻译。')
+            if not row or row['session_id']!=sid or not run or run['status'] not in ('completed','failed'):
+                raise ValueError('整份文件翻译结束后才能重译选中的字幕。')
+            if any(ctx['sid']==sid and ctx['id']==ident for ctx in self.review_requests.values()):
+                raise ValueError('这一句已在重译队列里。')
+            source=row.get('source_language') or 'auto';target=run['target_language']
+            profile=dict(self.profile(),source_language=source,target_language=target)
+            validate_profile(profile)
+            cap=reasoning_capability(profile)
+            if cap.get('error'):raise ValueError(cap['error'])
+            domain=self.settings.get('domain_bias')
+            rows=self.history.rows_around(sid,row['seq'])
+            batch,=plan_batches(rows,profile,domain,source,target,cue_id=ident)
+            token='review:'+uuid.uuid4().hex
+            record=dict(batch,session_id=sid,run_id=token,claim=token,payload=batch['items'])
+            job=job_from_record(record,rows,profile,get_key(profile),source,target,domain,history=self.history)
+            if not self.file_batches.enqueue(job):raise ValueError('翻译队列已满，请稍后再试。')
+            self.review_requests[token]={'id':ident,'sid':sid,'run':run['run_id'],'en':row['en'],'zh':row['zh']}
+        except Exception as error:
+            message=str(error) if isinstance(error,ValueError) else '无法创建单句翻译请求，请检查翻译服务设置。'
+            self.notify(message)
+            if dialog:dialog.status.setText(message)
+            return False
+        return True
+
+    def finish_review_cue(self,result):
+        token=result['run_id'];ctx=self.review_requests.pop(token,None)
+        if not ctx:return
+        sid=ctx['sid'];ident=ctx['id']
+        if 'translations' in result:
+            ok=self.history.apply_review_translation(sid,ident,result['translations'].get(ident,''),
+                result.get('flags',[]),expected_source=ctx['en'],expected_translation=ctx['zh'],expected_run_id=ctx['run'])
+            message='已重译所选字幕。' if ok else '这句字幕已更新，已忽略旧的重译结果。'
+            if ok:
+                self.review_cue_saved(sid)
+        else:message=result.get('error','单句重译失败。')
+        self.refresh_review_cues(sid)
+        dialog=self.review_dialogs.get(sid)
+        if dialog:dialog.status.setText(message)
+        self.notify(message)
+
     def update_file_translation_job(self,sid,state):
         if not sid:return
         self.file_queue.translation_update(sid,state)
+        self.refresh_review_cues(sid)
         if sid==self.current_session and not self.file_queue.active:
             job=self.file_queue.job_for_session(sid)
             name=job['name'] if job else ''
@@ -984,7 +1072,7 @@ class Window(QMainWindow):
                 self.state.setText(f'批量翻译中 · {done}/{total} 批 · '+name)
             elif status=='completed':
                 flags=state.get('translation_flags',0)
-                self.state.setText('翻译完成'+ (f' · {flags} 处数量/单位待核' if flags else '') +' · '+name)
+                self.state.setText('翻译完成'+ (f' · {flags} 处译文待核' if flags else '') +' · '+name)
             elif status=='failed':
                 self.state.setText('转录完成 · 翻译失败 · '+name)
             elif status=='cancelled':
@@ -992,18 +1080,17 @@ class Window(QMainWindow):
             elif status=='disabled':
                 self.state.setText('转录完成 · 翻译已关闭 · '+name)
 
-    def _enqueue_file_batches(self,run_id,limit=4):
-        """Keep a small per-run window in flight so several files share the queue."""
+    def _enqueue_file_batches(self,run_id):
+        """Read the preceding translations after the previous batch is committed."""
         context=self.batch_contexts.get(run_id)
-        if not context:return 0
+        if not context or context.get('claim'):return 0
         sid=context['sid'];queued=0
-        for batch in self.history.pending_batches(sid,run_id):
-            if queued>=limit:break
+        for batch in self.history.pending_batches(sid,run_id,1):
             if self.file_batches.jobs.qsize()>=64:break
             record=self.history.claim_batch(sid,run_id,batch['batch_id'])
             if not record:continue
             job=job_from_record(record,context['rows'],context['profile'],context['key'],
-                context['source'],context['target'],context['domain'])
+                context['source'],context['target'],context['domain'],history=self.history)
             if not job:
                 failed=self.history.fail_batch(sid,run_id,batch['batch_id'],record['claim'],
                     '源字幕已变化，本批次未写入译文')
@@ -1014,6 +1101,8 @@ class Window(QMainWindow):
                 self.history.release_batch_claim(sid,run_id,batch['batch_id'],record['claim'])
                 break
             queued+=1
+            context['claim']=record['claim']
+            break
         return queued
 
     def _fill_batch_queues(self):
@@ -1028,7 +1117,7 @@ class Window(QMainWindow):
         rows=self.history.rows(sid)
         if not rows:return False
         target=self.settings.get('target_language','简体中文')
-        source=self.settings.get('source_language','auto')
+        source=rows[0].get('source_language') or 'auto'
         current=self.history.batch_run(sid)
         if current and current['run_id'] in self.batch_active_runs:
             self._fill_batch_queues();return True
@@ -1122,7 +1211,7 @@ class Window(QMainWindow):
             return False
         self.batch_active_runs[run_id]=sid
         self.batch_contexts[run_id]={'sid':sid,'profile':profile,'key':key,'source':source,
-            'target':target,'rows':rows,'domain':self.settings.get('domain_bias')}
+            'target':target,'rows':{r['id']:r for r in rows},'domain':self.settings.get('domain_bias')}
         queued=self._enqueue_file_batches(run_id)
         counts=self.history.batch_progress(sid,run_id)
         if not queued and counts['pending']:
@@ -1155,6 +1244,8 @@ class Window(QMainWindow):
     def on_file_batch_done(self,result):
         if self._closed:return
         sid=result.get('session_id');run_id=result.get('run_id')
+        if run_id.startswith('review:'):
+            self.finish_review_cue(result);return
         run=self.history.batch_run(sid) if sid else None
         if not run or run['run_id']!=run_id:
             self.batch_active_runs.pop(run_id,None);self.batch_contexts.pop(run_id,None)
@@ -1169,6 +1260,7 @@ class Window(QMainWindow):
                     'translation_error':'源字幕已变化，当前批次未写入；可在历史记录中重试'})
             return
         counts=outcome['counts']
+        if run_id in self.batch_contexts:self.batch_contexts[run_id].pop('claim',None)
         if outcome.get('run_finished'):
             self.batch_active_runs.pop(run_id,None);self.batch_contexts.pop(run_id,None)
             run=self.history.batch_run(sid)
@@ -1179,7 +1271,7 @@ class Window(QMainWindow):
                     'translation_percent':100,'translation_done':counts['done'],
                     'translation_total':counts['total'],'translation_error':'','translation_flags':flags})
                 session=self.history.session(sid)
-                self.notify('本地文件批量翻译完成'+(f' · {flags} 处数量/单位待核' if flags else '')+
+                self.notify('本地文件批量翻译完成'+(f' · {flags} 处译文待核' if flags else '')+
                     (' · '+session['title'] if session else ''))
             else:
                 error=(run or {}).get('error') or '部分批次翻译失败，可在历史记录中重试'
@@ -1195,13 +1287,15 @@ class Window(QMainWindow):
                 'translation_percent':round(100*counts['done']/max(1,counts['total'])),
                 'translation_done':counts['done'],'translation_total':counts['total'],
                 'translation_error':'','translation_flags':self.history.batch_flag_count(sid,run_id)})
-            self._fill_batch_queues()
+        self._fill_batch_queues()
         self.render()
 
     def on_file_batch_failed(self,result):
         if self._closed:return
         sid=result.get('session_id');run_id=result.get('run_id')
         if not sid or not run_id:return
+        if run_id.startswith('review:'):
+            self.finish_review_cue(result);return
         current=self.history.batch_run(sid)
         if not current or current['run_id']!=run_id:
             self.batch_active_runs.pop(run_id,None);self.batch_contexts.pop(run_id,None)
@@ -1216,6 +1310,7 @@ class Window(QMainWindow):
             result.get('claim',''),result.get('error','批量翻译失败'))
         if not outcome.get('ok'):return
         counts=outcome['counts']
+        if run_id in self.batch_contexts:self.batch_contexts[run_id].pop('claim',None)
         if outcome.get('run_finished'):
             self.batch_active_runs.pop(run_id,None);self.batch_contexts.pop(run_id,None)
             run=self.history.batch_run(sid)
@@ -1238,7 +1333,7 @@ class Window(QMainWindow):
                 'translation_percent':round(100*counts['done']/max(1,counts['total'])),
                 'translation_done':counts['done'],'translation_total':counts['total'],
                 'translation_error':result.get('error','部分批次翻译失败，可重试')})
-            self._fill_batch_queues()
+        self._fill_batch_queues()
         self.render()
 
     def cancel_file_translation(self,sid=None):
@@ -1258,6 +1353,8 @@ class Window(QMainWindow):
         return True
 
     def interrupt_active_file_translations(self,disable=False):
+        for ctx in list(self.review_requests.values()):
+            self.cancel_review_cue(ctx['sid'],ctx['id'])
         seen=set()
         for run in self.history.resumable_batch_runs():
             sid=run['session_id'];seen.add(sid)
@@ -1403,6 +1500,9 @@ class Window(QMainWindow):
             self.file_batches.cancel_run(sid,run['run_id'])
             self.batch_active_runs.pop(run['run_id'],None);self.batch_contexts.pop(run['run_id'],None)
         for _,ident,*_ in self.translator.cancel_queued(session=sid):self.active_jobs.discard(ident)
+        for ctx in list(self.review_requests.values()):
+            if ctx['sid']==sid:self.cancel_review_cue(sid,ctx['id'])
+        if sid in self.review_dialogs:self.review_dialogs[sid].close()
         self.history.delete_session(sid)
         self.drafts.discard_session(sid)
         self.translation_sessions.pop(sid,None)
@@ -1607,6 +1707,7 @@ class Window(QMainWindow):
             self.closing=True
             self.file_batches.stop();self.file_batches.wait(1000)
             if self.search_dialog:self.search_dialog.close()
+            for dialog in list(self.review_dialogs.values()):dialog.close()
             self.desktop.shutdown()
             if self.tray:self.tray.shutdown()
             self.history.finish(self.current_session)
